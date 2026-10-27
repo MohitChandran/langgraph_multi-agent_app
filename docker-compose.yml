@@ -1,0 +1,39 @@
+# Local infrastructure. Start everything with:  docker compose up -d
+# Values like ${POSTGRES_USER} are read from the .env file next to this file.
+#
+# Langfuse (tracing) is added in Phase 2, when we start tracing the graph.
+
+services:
+  postgres:
+    # Official Postgres image with the pgvector extension preinstalled:
+    # one database for business data (DB agent) AND document vectors (Doc QA agent).
+    image: pgvector/pgvector:pg17
+    container_name: ops-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      READONLY_DB_PASSWORD: ${READONLY_DB_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Scripts here run ONCE, in alphabetical order, when the data volume is first created.
+      - ./scripts/db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mailpit:
+    # Fake SMTP server: catches every email the Email agent sends, so nothing
+    # reaches a real inbox during development. View mails at http://localhost:8025
+    image: axllent/mailpit:latest
+    container_name: ops-mailpit
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # Web UI
+
+volumes:
+  pgdata:

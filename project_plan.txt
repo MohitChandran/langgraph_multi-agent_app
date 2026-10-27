@@ -1,0 +1,313 @@
+ENTERPRISE MULTI-AGENT OPS PLATFORM — PROJECT PLAN
+Last updated: 2026-10-26
+Status: Phase 0 done (except Langfuse, see Phase 2). Next: Phase 1 (Database Agent).
+
+══════════════════════════════════════════════════════════════════════════════════════════════
+0. DECISION LOG
+══════════════════════════════════════════════════════════════════════════════════════════════
+- LLM provider: Groq API (via langchain-groq).
+    Models (set in .env, 2026-10-26): strong = openai/gpt-oss-20b, fast = qwen/qwen3.8-27b.
+    Note: Groq has no embeddings API, so embeddings come from a local model
+    (e.g. sentence-transformers / FastEmbed). Free and no extra API key.
+- Agent framework: LangGraph for the orchestrator and internal agents (no LlamaIndex, no ADK/AutoGen).
+    The Email agent is a SEPARATE service talking A2A, built with CrewAI (decided 2026-10-26).
+    A2A is framework-agnostic: a LangGraph client talking to a CrewAI server shows exactly that.
+- Frontend: simple React app (Vite).
+- Evaluation & reporting: ADDED. Every agent gets a small eval set and a metrics report (Section 5).
+- SQL safety: ADDED. DB-level read-only role + query parsing, not just string checks.
+- A2A spec: verify current spec version & method names at the start of Phase 5
+  (early drafts used /tasks/send; newer versions use JSON-RPC methods like message/send).
+- Hybrid search: corrected to dense (embeddings) + sparse (keyword/BM25), fused with RRF.
+- HITL flow: detailed design to be done before Phase 6 (see Section 3-F).
+- Local email: Mailpit (fake SMTP inbox in Docker) instead of real email during development.
+- Quality: pytest tests, GitHub Actions CI, DB seed script, strong README.
+
+══════════════════════════════════════════════════════════════════════════════════════════════
+1. EXECUTIVE SYSTEM OVERVIEW
+══════════════════════════════════════════════════════════════════════════════════════════════
+A multi-agent platform with clearly separated concerns:
+
+- Core Brain: a central LangGraph orchestrator (supervisor) behind a FastAPI gateway.
+- Internal leaf agents (run inside the orchestrator service):
+    * Database Agent   — safe Text-to-SQL over PostgreSQL.
+    * Doc QA Agent     — layout-aware PDF ingestion + hybrid RAG with citations.
+    * Web Search Agent — reaches live web data through MCP (DuckDuckGo MCP server).
+- External service (A2A protocol):
+    * Email & Dispatch Agent — standalone CrewAI service on its own port.
+      Exposes an A2A interface (agent card, task lifecycle, artifacts).
+      Drafts emails, runs policy/PII checks, and requires human approval (HITL) before sending.
+- Frontend: React dashboard for chat, document upload, and approving email dispatches.
+- Observability: Langfuse traces across the orchestrator AND the A2A email service.
+- Evaluation: per-agent eval sets with a generated metrics report.
+
+Protocols, in one line each:
+- MCP = an agent reaching DOWN to tools/data.
+- A2A = an agent talking ACROSS to another agent in another service.
+
+══════════════════════════════════════════════════════════════════════════════════════════════
+2. ARCHITECTURE DIAGRAM
+══════════════════════════════════════════════════════════════════════════════════════════════
+                            ┌────────────────────────────────────────┐
+                            │        Frontend (React + Vite)         │
+                            │ - Chat (streamed) & file upload        │
+                            │ - HITL email review / approval modal   │
+                            └────────────────────┬───────────────────┘
+                                                 │ HTTP / SSE stream
+                                                 ▼
+                            ┌────────────────────────────────────────┐
+                            │            FastAPI Gateway             │
+                            │ - Session management                   │
+                            │ - File upload endpoints                │
+                            │ - HITL resume endpoint                 │
+                            └────────────────────┬───────────────────┘
+                                                 │
+                                                 ▼
+                            ┌────────────────────────────────────────┐
+                            │    Central Orchestrator (LangGraph)    │
+                            │ - Intent classification & routing      │
+                            │ - Plan decomposition                   │
+                            │ - Synthesis, memory, checkpointer      │
+                            └────────────────────┬───────────────────┘
+                                                 │
+           ┌────────────────────────┬────────────┴───────────┬────────────────────────┐
+           │                        │                        │                        │  A2A (JSON-RPC over HTTP)
+           ▼                        ▼                        ▼                        ▼
+┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐
+│    Database Agent    │ │     Doc QA Agent     │ │   Web Search Agent   │ │  Email & HITL Agent  │
+│      (internal)      │ │      (internal)      │ │      (internal)      │ │  (separate service)  │
+│ - Schema reflection  │ │ - Layout chunking    │ │ - Query generation   │ │ - A2A agent card     │
+│ - Safe Text-to-SQL   │ │ - Hybrid search      │ │ - Result synthesis   │ │ - PII/policy checks  │
+│ - Pydantic checks    │ │   (dense + BM25)     │ │ - Tools via MCP      │ │ - HITL approval      │
+└──────────┬───────────┘ └──────────┬───────────┘ └──────────┬───────────┘ └──────────┬───────────┘
+           │ read-only role         │                        │ MCP (stdio/HTTP)       │ SMTP
+           ▼                        ▼                        ▼                        ▼
+    [ PostgreSQL ]            [ pgvector ]       [ DuckDuckGo MCP server ]     [ Mailpit (dev) ]
+
+══════════════════════════════════════════════════════════════════════════════════════════════
+            CROSS-CUTTING: Langfuse tracing (orchestrator + A2A service) | Eval reports
+══════════════════════════════════════════════════════════════════════════════════════════════
+
+══════════════════════════════════════════════════════════════════════════════════════════════
+3. COMPONENT PLAN
+══════════════════════════════════════════════════════════════════════════════════════════════
+A. Central Orchestrator (LangGraph + FastAPI)
+   - LangGraph StateGraph acting as a supervisor.
+   - Typed state: user query, planned sub-tasks, results per agent, final answer, messages.
+   - Conditional edges route to the right agent(s); can run agents in parallel (Scenario 2).
+   - Checkpointer (Postgres) persists graph state per session, which is needed for memory AND HITL.
+   - FastAPI streams progress and tokens to the frontend via SSE.
+   - LLM: Groq. Pick models at Phase 0 from Groq's current model list
+     (a stronger model for routing/SQL, a small fast one for cheap steps).
+   - Groq free tier has rate limits: add retry with backoff from day one.
+
+B. Database Agent (PostgreSQL)
+   - Tables: invoices, vendors, users, tickets, audit_logs (filled by a seed script).
+   - Flow: reflect schema -> generate SQL -> validate -> execute -> validate rows -> return.
+   - Safety (defense in depth):
+       1. Connect with a dedicated Postgres role that has SELECT-only grants.
+       2. Parse SQL with sqlglot; reject anything that is not a single SELECT.
+       3. Enforce a LIMIT and a statement_timeout.
+       4. On SQL error, feed the error back to the LLM for one or two self-correction retries.
+   - Async driver (asyncpg / psycopg async). Output validated with Pydantic.
+
+C. Doc QA Agent (Document Intelligence)
+   - PDF upload via FastAPI multipart endpoint.
+   - Layout-aware parsing to markdown, keeping headers and tables
+     (candidate libraries: Docling or pymupdf4llm; decide in Phase 3).
+   - Chunking by document structure (sections), with metadata (file, page, section).
+   - Hybrid retrieval: dense (local embeddings in pgvector) + sparse (BM25 / Postgres full-text),
+     merged with Reciprocal Rank Fusion (implement RRF ourselves to learn it).
+   - Answers must cite chunks (file + page). If the evidence is weak, say "not found".
+
+D. Web Search Agent (MCP)
+   - Connects to a DuckDuckGo MCP server using langchain-mcp-adapters.
+   - Discovers tools at runtime (search, fetch page) instead of hardcoding API calls.
+   - Learning bonus: write our own tiny MCP server to understand the protocol from both sides.
+
+E. Email & Dispatch Agent (separate CrewAI service, A2A server)
+   - Own process, own port, own requirements, so it is a genuine service boundary.
+   - Serves an Agent Card at /.well-known/agent-card.json describing its skills.
+   - Orchestrator is the A2A client: discovers the card, sends a task, tracks task state.
+   - Drafts email -> PII masking + tone/policy checks -> waits for approval -> sends via SMTP.
+   - Dev: SMTP goes to Mailpit (view mails at its web UI). Real provider (e.g. Resend) optional later.
+   - Use the official A2A Python SDK; confirm current spec at Phase 5 start.
+
+F. Human-in-the-Loop (HITL) flow — DETAILED DESIGN TO DO BEFORE PHASE 6
+   Known challenge: TWO things pause at the same time.
+   - The email service puts its A2A task into "input-required".
+   - The orchestrator graph must also pause (LangGraph interrupt + checkpointer) and save state.
+   - Frontend shows the draft; Approve/Reject/Edit hits the FastAPI resume endpoint.
+   - Gateway resumes the graph -> graph continues the A2A task -> email sent -> task "completed".
+   Open questions for the design session: where the pending-approval record lives, timeouts,
+   what "Edit" means (re-draft vs manual edit), and what happens on reject.
+
+G. Observability (Langfuse, self-hosted in Docker)
+   - Langfuse callback on the LangGraph runtime; tracing in the email service too.
+   - Propagate trace context over the A2A HTTP call so the whole flow is ONE trace:
+     Router -> DB Agent -> A2A call -> Email draft -> Approval wait -> Dispatch.
+   - Track tokens, latency per step, and cost (Groq prices may need custom model
+     definitions in Langfuse).
+
+══════════════════════════════════════════════════════════════════════════════════════════════
+4. FRONTEND (React + Vite, kept simple)
+══════════════════════════════════════════════════════════════════════════════════════════════
+   - Chat page with streamed responses. Note: browser EventSource only supports GET;
+     for POST + streaming use fetch() and read the response body stream.
+   - File upload with ingestion status.
+   - Approval card/modal for pending emails: Approve / Reject / Edit.
+   - Plain CSS or a light component library. No complex state management.
+
+══════════════════════════════════════════════════════════════════════════════════════════════
+5. EVALUATION & REPORTING
+══════════════════════════════════════════════════════════════════════════════════════════════
+   Goal: turn "I built it" into "I measured it". The numbers go into the README and resume.
+   - Text-to-SQL: ~25 questions with expected results -> execution accuracy.
+   - Doc QA RAG: ~20 questions with known answer pages -> retrieval hit rate@k,
+     answer faithfulness / citation correctness (LLM-as-judge + manual spot checks).
+     Compare dense-only vs BM25-only vs hybrid. This comparison is a strong interview story.
+   - Router: ~20 prompts with the expected agent(s) -> routing accuracy.
+   - Report: a script (evals/run_all.py) that runs every eval and writes a markdown report
+     with metrics, latency, and token usage. Optionally push scores to Langfuse.
+
+══════════════════════════════════════════════════════════════════════════════════════════════
+6. EXECUTION SCENARIOS
+══════════════════════════════════════════════════════════════════════════════════════════════
+Scenario 1: Multi-hop DB lookup + A2A email dispatch (with HITL)
+   Prompt: "Query the database for all pending vendor invoices due this week, summarize them,
+            and send an email draft to accounts@company.com."
+   1. Orchestrator plans two steps: DB retrieval, then email dispatch.
+   2. DB Agent: schema -> safe SQL -> returns e.g. 3 pending invoices.
+   3. Orchestrator summarizes and builds the email task payload.
+   4. A2A: orchestrator sends the task to the Email service.
+   5. Email service drafts + checks -> task state "input-required". Orchestrator graph pauses.
+   6. Frontend shows "Email drafted for accounts@company.com. Review & approve."
+   7. User clicks Approve -> gateway resumes graph -> A2A task continues.
+   8. Email sent via SMTP (Mailpit) -> task "completed" with a delivery receipt artifact.
+   9. Orchestrator shows confirmation to the user.
+
+Scenario 2: Document intelligence + live web verification via MCP
+   Prompt: "Upload this quarterly compliance PDF, check our stated cloud vendor policies, and
+            search the web to see if the vendor updated their SLA terms recently."
+   1. Orchestrator runs Doc QA and Web Search (parallel where possible).
+   2. Doc QA: hybrid search over the PDF -> vendor name + SLA terms with citations.
+   3. Web Search: DuckDuckGo via MCP -> recent public SLA updates.
+   4. Orchestrator compares both and highlights compliance gaps, citing both sources.
+
+══════════════════════════════════════════════════════════════════════════════════════════════
+7. REPOSITORY STRUCTURE
+══════════════════════════════════════════════════════════════════════════════════════════════
+Multi-agent/   (repo root)
+├── docker-compose.yml              # Postgres (+pgvector), Langfuse, Mailpit, all services
+├── README.md                       # Diagram, setup, eval results, design decisions, demo GIF
+├── .env.example                    # GROQ_API_KEY, DB URLs, Langfuse keys, SMTP settings
+├── .github/workflows/ci.yml        # Lint + tests on every push
+├── scripts/
+│   └── seed_db.py                  # Realistic fake invoices, vendors, tickets, users
+├── evals/
+│   ├── datasets/                   # sql_questions.json, rag_questions.json, routing.json
+│   ├── run_all.py                  # Runs evals, writes the report
+│   └── reports/                    # Generated markdown reports
+│
+├── services/
+│   ├── orchestrator-api/           # FastAPI + LangGraph
+│   │   ├── app/
+│   │   │   ├── main.py             # FastAPI entrypoint, SSE streaming, endpoints
+│   │   │   ├── config.py
+│   │   │   ├── llm.py              # Groq client setup, retries
+│   │   │   ├── graph/
+│   │   │   │   ├── state.py        # Typed state definitions
+│   │   │   │   ├── supervisor.py   # Routing prompt & logic
+│   │   │   │   └── graph.py        # Graph assembly, checkpointer, compile
+│   │   │   ├── agents/
+│   │   │   │   ├── db_agent.py     # SQL generation, validation, execution
+│   │   │   │   ├── doc_agent.py    # Parsing, chunking, hybrid retrieval
+│   │   │   │   └── search_agent.py # MCP client (DuckDuckGo)
+│   │   │   └── clients/
+│   │   │       └── a2a_client.py   # A2A discovery & task lifecycle
+│   │   ├── tests/
+│   │   └── pyproject.toml
+│   │
+│   ├── email-a2a-service/          # Separate CrewAI service behind an A2A server
+│   │   ├── app/
+│   │   │   ├── main.py             # A2A server + agent card
+│   │   │   ├── agent.py            # Drafting + PII/policy checks (CrewAI)
+│   │   │   ├── hitl.py             # Task states: submitted -> input-required -> completed
+│   │   │   └── mailer.py           # SMTP dispatch (Mailpit in dev)
+│   │   ├── tests/
+│   │   └── pyproject.toml
+│   │
+│   └── frontend/                   # React + Vite
+│       ├── src/
+│       │   ├── App.jsx
+│       │   ├── components/         # Chat, FileUpload, ApprovalModal
+│       │   └── api.js              # Streaming fetch helpers
+│       └── package.json
+
+Tooling: Python 3.12, uv, ruff, pytest. Node LTS for the frontend.
+
+══════════════════════════════════════════════════════════════════════════════════════════════
+8. EXECUTION PLAN (agreed)
+══════════════════════════════════════════════════════════════════════════════════════════════
+Rule: each phase ends with something runnable, so the project is always demo-able.
+Rule: Claude writes the code and explains every file/function; interview prep happens after development.
+
+[x] Phase 0 — Setup   (done 2026-10-26; Langfuse container moved to Phase 2)
+    Build: repo skeleton with uv; docker-compose (Postgres+pgvector, Langfuse, Mailpit);
+           .env handling; seed script with realistic data; Groq "hello world" call.
+    Learn: Docker Compose, config/secrets, project layout, choosing Groq models.
+
+[ ] Phase 1 — Database Agent (standalone)
+    Build: schema reflection -> SQL generation -> sqlglot validation -> read-only execution
+           -> Pydantic validation -> self-correction retry. Plus the 25-question SQL eval.
+    Learn: structured output prompting, SQL safety, measuring an LLM component.
+
+[ ] Phase 2 — Orchestrator v1
+    Build: LangGraph supervisor with only the DB agent; FastAPI endpoint with SSE streaming;
+           Postgres checkpointer; Langfuse tracing.
+    Learn: StateGraph, typed state, conditional edges, checkpointing, streaming, tracing.
+
+[ ] Phase 3 — Doc QA Agent
+    Build: PDF upload -> layout-aware parsing -> structural chunking -> local embeddings
+           in pgvector -> BM25 -> RRF fusion -> cited answers. Plus the RAG eval
+           (dense vs sparse vs hybrid comparison).
+    Learn: chunking strategies, embeddings vs keyword search, fusion, grounding/citations.
+
+[ ] Phase 4 — Web Search via MCP
+    Build: connect to the DuckDuckGo MCP server; tool discovery; parallel branches for
+           Scenario 2. Bonus: our own minimal MCP server.
+    Learn: MCP architecture, stdio vs HTTP transports, tool schemas, parallel graph branches.
+
+[ ] Phase 5 — Email Agent via A2A (no HITL yet)
+    Build: separate CrewAI service + A2A server + agent card; mail to Mailpit;
+           orchestrator A2A client. (First: verify current A2A spec.)
+    Learn: service boundaries, A2A protocol, inter-service communication.
+
+[ ] Phase 6 — HITL end to end  (design session first, see 3-F)
+    Build: input-required <-> LangGraph interrupt, resume endpoint, single cross-service trace.
+    Learn: durable pause/resume, distributed tracing, async workflows.
+
+[ ] Phase 7 — React Frontend
+    Build: chat with streaming, file upload, approval modal.
+    Learn: consuming streamed responses in the browser, simple React state.
+
+[ ] Phase 8 — Hardening & Showcase
+    Build: tests, CI, retries/timeouts, error handling, full docker-compose up,
+           eval report, README with diagram + Langfuse screenshot + demo GIF/video.
+    Learn: what "production-ready" means and how to present it.
+
+══════════════════════════════════════════════════════════════════════════════════════════════
+9. OPEN ITEMS
+══════════════════════════════════════════════════════════════════════════════════════════════
+- Hours per week available -> realistic timeline per phase.
+- HITL detailed design (before Phase 6).
+- PDF parsing library (Phase 3), A2A spec version (Phase 5).
+
+══════════════════════════════════════════════════════════════════════════════════════════════
+10. WHY THIS STANDS OUT IN INTERVIEWS
+══════════════════════════════════════════════════════════════════════════════════════════════
+- Architecture: separate services and standard protocols, not one giant script.
+- Clear protocol story: MCP for tools (down), A2A for agent-to-agent (across).
+- Safety: read-only DB role + SQL parsing; human approval before irreversible actions.
+- Measured, not just built: eval report with real numbers (SQL accuracy, retrieval hit rate,
+  routing accuracy, hybrid vs dense comparison).
+- Observability: one Langfuse trace across services, with tokens, latency and cost.

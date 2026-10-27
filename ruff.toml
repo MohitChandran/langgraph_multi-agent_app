@@ -1,0 +1,7 @@
+# Shared lint/format rules for all Python code in the repo (services, scripts, evals).
+line-length = 120
+target-version = "py312"
+
+[lint]
+# E/F = pycodestyle + pyflakes basics, I = import sorting, B = common bug patterns, UP = modern syntax
+select = ["E", "F", "I", "B", "UP"]
