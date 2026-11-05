@@ -1,6 +1,6 @@
 ENTERPRISE MULTI-AGENT OPS PLATFORM — PROJECT PLAN
 Last updated: 2026-10-26
-Status: Phase 0 done (except Langfuse, see Phase 2). Next: Phase 1 (Database Agent).
+Status: Phase 1 (Database Agent) in progress — steps 1-2 done (database, SQL safety gate).
 
 ══════════════════════════════════════════════════════════════════════════════════════════════
 0. DECISION LOG
@@ -100,15 +100,29 @@ A. Central Orchestrator (LangGraph + FastAPI)
      (a stronger model for routing/SQL, a small fast one for cheap steps).
    - Groq free tier has rate limits: add retry with backoff from day one.
 
-B. Database Agent (PostgreSQL)
-   - Tables: invoices, vendors, users, tickets, audit_logs (filled by a seed script).
-   - Flow: reflect schema -> generate SQL -> validate -> execute -> validate rows -> return.
-   - Safety (defense in depth):
-       1. Connect with a dedicated Postgres role that has SELECT-only grants.
-       2. Parse SQL with sqlglot; reject anything that is not a single SELECT.
-       3. Enforce a LIMIT and a statement_timeout.
-       4. On SQL error, feed the error back to the LLM for one or two self-correction retries.
-   - Async driver (asyncpg / psycopg async). Output validated with Pydantic.
+B. Database Agent (PostgreSQL) — design agreed 2026-11-02
+   - Role: an "ops data analyst" for finance/ops. Answers plain-English questions about vendors,
+     contracts, invoices, tickets and audit history. Always returns answer + the SQL + the rows.
+   - Postgres, not SQLite: real roles/grants, statement_timeout, column-level privileges,
+     concurrency, and pgvector in the same DB.
+   - Tables (scripts/db/01_schema.sql): vendors (with category), users, contracts (SLA, dates,
+     auto_renew), invoices (contract_id, paid_date), tickets, audit_logs.
+     Data: scripts/seed_db.py — deterministic, dates relative to today, real vendor names,
+     fictional amounts. Rebuild everything with ./scripts/reset_db.sh.
+   - Shape: a FIXED LangGraph workflow (not a ReAct agent), so safety steps can't be skipped:
+       load_schema -> generate_sql -> validate_sql -> execute_sql -> answer
+                          ^-------- repair (max 2 retries) <--------'  (on validation/DB error)
+   - Steps: load_schema (reflect tables, columns, FKs, COMMENTs, enum values; cached)
+            generate_sql (strong model, structured output: sql + explanation)
+            validate_sql (sqlglot, pure Python), execute_sql (async, read-only role)
+            repair (error fed back to the LLM), answer (fast model, ONLY from returned rows).
+   - Restrictions (each enforced in >= 2 places, never only in the prompt):
+       no writes/DDL (role + read-only txn + sqlglot) | single statement only |
+       table allowlist, no pg_catalog/information_schema/RAG tables | no dangerous functions
+       (pg_sleep, pg_read_file, dblink, set_config...) | no SELECT * | LIMIT capped at 100 |
+       5s statement_timeout | answers only from rows | row text treated as data, not instructions.
+       Decided 2026-11-02: the agent may read ALL columns, including users.email.
+   - Code: app/agents/db/ package: schema.py, safety.py, database.py, prompts.py, models.py, graph.py.
 
 C. Doc QA Agent (Document Intelligence)
    - PDF upload via FastAPI multipart endpoint.
@@ -219,7 +233,7 @@ Multi-agent/   (repo root)
 │   │   │   │   ├── supervisor.py   # Routing prompt & logic
 │   │   │   │   └── graph.py        # Graph assembly, checkpointer, compile
 │   │   │   ├── agents/
-│   │   │   │   ├── db_agent.py     # SQL generation, validation, execution
+│   │   │   │   ├── db/             # schema, safety, database, prompts, models, graph
 │   │   │   │   ├── doc_agent.py    # Parsing, chunking, hybrid retrieval
 │   │   │   │   └── search_agent.py # MCP client (DuckDuckGo)
 │   │   │   └── clients/
@@ -257,8 +271,11 @@ Rule: Claude writes the code and explains every file/function; interview prep ha
     Learn: Docker Compose, config/secrets, project layout, choosing Groq models.
 
 [ ] Phase 1 — Database Agent (standalone)
-    Build: schema reflection -> SQL generation -> sqlglot validation -> read-only execution
-           -> Pydantic validation -> self-correction retry. Plus the 25-question SQL eval.
+    Steps: [x] 1. schema (vendor category, contracts, paid_date) + reproducible seed + reset_db.sh
+           [x] 2. safety.py (sqlglot validator) + 49 pytest cases incl. attack queries, run in CI
+           [ ] 3. schema.py (reflection) + database.py (async read-only pool)
+           [ ] 4. LangGraph workflow + CLI runner
+           [ ] 5. 25-question SQL eval (execution accuracy) + first report
     Learn: structured output prompting, SQL safety, measuring an LLM component.
 
 [ ] Phase 2 — Orchestrator v1

@@ -5,3 +5,7 @@ target-version = "py312"
 [lint]
 # E/F = pycodestyle + pyflakes basics, I = import sorting, B = common bug patterns, UP = modern syntax
 select = ["E", "F", "I", "B", "UP"]
+
+[lint.isort]
+# Each service's own package is called `app`; group it after third-party imports.
+known-first-party = ["app"]

@@ -1,5 +1,5 @@
 # Continuous Integration: runs on every push / pull request.
-# Phase 0: lint only. Tests get added here in Phase 1+, and the full pipeline in Phase 8.
+# Lint + unit tests. Integration tests (needing Postgres) and the full pipeline come in Phase 8.
 name: CI
 
 on:
@@ -16,3 +16,14 @@ jobs:
         run: uvx ruff check .
       - name: Ruff format check
         run: uvx ruff format --check .
+
+  test-orchestrator:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/orchestrator-api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Unit tests (no database or API key needed)
+        run: uv run pytest -q
