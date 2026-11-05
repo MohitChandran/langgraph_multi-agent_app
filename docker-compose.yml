@@ -9,6 +9,7 @@ services:
     # one database for business data (DB agent) AND document vectors (Doc QA agent).
     image: pgvector/pgvector:pg17
     container_name: ops-postgres
+    restart: unless-stopped # come back after a reboot / Docker restart
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -31,6 +32,7 @@ services:
     # reaches a real inbox during development. View mails at http://localhost:8025
     image: axllent/mailpit:latest
     container_name: ops-mailpit
+    restart: unless-stopped
     ports:
       - "1025:1025" # SMTP
       - "8025:8025" # Web UI
