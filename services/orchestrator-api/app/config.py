@@ -39,7 +39,8 @@ class Settings(BaseSettings):
 
     # --- Database ---
     # The DB agent only ever gets the read-only URL (defense in depth, see project plan 3-B).
-    readonly_database_url: str = ""
+    # Required: no default, so a missing value fails at startup, not on the first question.
+    readonly_database_url: str
 
 
 @lru_cache
