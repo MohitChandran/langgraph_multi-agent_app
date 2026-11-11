@@ -9,6 +9,9 @@
   --surface: #f0f4f9; /* composer, user bubble, cards */
   --surface-hover: #e4e9f1;
   --panel: #f8fafd; /* SQL & data panel */
+  --sidebar: #f0f4f9;
+  --active: #d3e3fd; /* highlighted chat in the sidebar */
+  --active-text: #041e49;
   --border: #dde3ea;
   --text: #1f1f1f;
   --text-muted: #5f6368;
@@ -36,6 +39,9 @@
     --surface: #1e1f20;
     --surface-hover: #2a2b2d;
     --panel: #1a1b1c;
+    --sidebar: #1e1f20;
+    --active: #1f3760;
+    --active-text: #d3e3fd;
     --border: #3c4043;
     --text: #e3e3e3;
     --text-muted: #a8abb1;
@@ -70,20 +76,26 @@ button:disabled {
   cursor: default;
 }
 
-/* ---------- layout: header / scrolling chat / composer ---------- */
+/* ---------- layout: sidebar | (header / scrolling chat / composer) ---------- */
 
 .app {
   display: flex;
-  flex-direction: column;
   height: 100dvh;
+}
+
+.main {
+  flex: 1;
+  min-width: 0; /* lets the chat column shrink instead of overflowing */
+  display: flex;
+  flex-direction: column;
 }
 
 .topbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   height: 60px;
-  padding: 0 16px;
+  padding: 0 12px;
   flex-shrink: 0;
 }
 
@@ -548,16 +560,219 @@ button:disabled {
   opacity: 0.6;
 }
 
-.icon-button.stop {
-  background: var(--text);
-  color: var(--bg);
-}
-
 .disclaimer {
   font-size: 12px;
   color: var(--text-muted);
   text-align: center;
   margin: 8px 0 0;
+}
+
+/* ---------- sidebar ---------- */
+
+.sidebar {
+  width: 272px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar);
+  padding: 12px 10px;
+}
+
+.sidebar:not(.open) {
+  display: none;
+}
+
+.sidebar-header {
+  padding: 2px 2px 14px;
+}
+
+.sidebar .new-chat {
+  background: var(--surface-hover); /* the sidebar is already --surface, so use a step darker */
+}
+
+.sidebar-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  padding: 6px 12px;
+}
+
+.session-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  border-radius: 999px;
+}
+
+.session-item:hover {
+  background: var(--surface-hover);
+}
+
+.session-item.active {
+  background: var(--active);
+  color: var(--active-text);
+}
+
+.session-link {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  color: inherit;
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.session-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* rename / delete buttons appear on hover, on keyboard focus, and on the open chat */
+.session-actions {
+  display: none;
+  gap: 2px;
+  padding-right: 6px;
+}
+
+.session-item:hover .session-actions,
+.session-item:focus-within .session-actions,
+.session-item.active .session-actions {
+  display: flex;
+}
+
+.session-actions button {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  display: grid;
+  place-items: center;
+  color: inherit;
+  opacity: 0.75;
+}
+
+.session-actions button:hover {
+  opacity: 1;
+  background: var(--bg);
+}
+
+.running-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.rename-input {
+  flex: 1;
+  min-width: 0;
+  margin: 2px;
+  padding: 6px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+}
+
+.sidebar-empty,
+.sidebar-error {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 4px 12px;
+  margin: 0;
+}
+
+.sidebar-error {
+  color: var(--danger);
+}
+
+.backdrop {
+  display: none;
+}
+
+.icon-button.ghost {
+  background: transparent;
+  color: var(--text);
+}
+
+.icon-button.ghost:hover {
+  background: var(--surface);
+}
+
+/* ---------- chat page notes ---------- */
+
+.thread-note {
+  color: var(--text-muted);
+  margin: 12vh 0 0;
+  text-align: center;
+}
+
+.thread-note a {
+  color: var(--accent);
+}
+
+.load-earlier {
+  align-self: center;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.load-earlier:hover {
+  background: var(--surface);
+}
+
+.composer textarea:disabled {
+  cursor: not-allowed;
+}
+
+/* ---------- phones and narrow windows: the sidebar slides over the chat ---------- */
+
+@media (max-width: 900px) {
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 20;
+    box-shadow: 0 0 24px rgba(0, 0, 0, 0.2);
+  }
+
+  .backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    background: rgba(0, 0, 0, 0.35);
+  }
+
+  .session-actions {
+    display: flex; /* touch screens have no hover */
+  }
 }
 
 /* ---------- phones ---------- */

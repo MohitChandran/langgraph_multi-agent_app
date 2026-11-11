@@ -32,6 +32,10 @@ cd services/frontend && npm install && npm run dev
 Open http://localhost:5173 and ask a question. Under each answer, "Show SQL & data" shows the
 workflow steps that ran, the exact SQL and the returned rows. Vite forwards `/api/*` to port 8000.
 
+Chats are saved in Postgres (schema `app`, see `plannings/01-chat-sessions-and-memory.md`): the
+sidebar lists them, each has its own URL (`/c/<id>`), and the agent remembers the last 3
+exchanges of the chat you're in (`CHAT_MEMORY_TURNS`), so follow-ups like "only the ones in India" work.
+
 `reset_db.sh` can be re-run any time to get a clean database. The mock data is deterministic
 (same rows on every machine) and its dates are relative to today, so time-based questions
 ("invoices due this week") always have answers.

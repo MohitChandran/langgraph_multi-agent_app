@@ -2,20 +2,24 @@
  * The rounded input box at the bottom (Gemini calls it the "prompt bar").
  *
  * Enter sends, Shift+Enter adds a new line, and the text area grows with its
- * content up to a maximum height. While a request runs, the send button turns
- * into a stop button.
+ * content up to a maximum height. While THIS chat is generating a reply, sending is
+ * disabled (the server allows one reply at a time per chat and would answer 409);
+ * other chats stay usable. There's no stop button: the server finishes and saves the
+ * answer anyway, so you can switch away and come back to it.
  */
 import { useEffect, useRef, useState } from "react";
-import { SendIcon, StopIcon } from "./icons.jsx";
+import { SendIcon } from "./icons.jsx";
 
 const MAX_HEIGHT_PX = 200;
 
 /**
- * @param {{onSend: (question: string) => void, onStop: () => void, pending: boolean}} props
+ * @param {{onSend: (question: string) => void, busy: boolean, disabled?: boolean}} props
+ *   busy = this chat is generating a reply; disabled = the chat can't be used (e.g. not found).
  */
-export default function Composer({ onSend, onStop, pending }) {
+export default function Composer({ onSend, busy, disabled = false }) {
   const [text, setText] = useState("");
   const textareaRef = useRef(null);
+  const blocked = busy || disabled;
 
   // Grow/shrink the textarea to fit its text: reset the height, then use the content height.
   useEffect(() => {
@@ -24,16 +28,16 @@ export default function Composer({ onSend, onStop, pending }) {
     textarea.style.height = `${Math.min(textarea.scrollHeight, MAX_HEIGHT_PX)}px`;
   }, [text]);
 
-  // Put the cursor back in the box when an answer arrives, so the next question can be typed right away.
+  // Put the cursor back in the box when the chat becomes usable, so the next question can be typed right away.
   useEffect(() => {
-    if (!pending) textareaRef.current?.focus();
-  }, [pending]);
+    if (!blocked) textareaRef.current?.focus();
+  }, [blocked]);
 
   /** Send the trimmed text (if any) and clear the box. */
   function submit(event) {
     event?.preventDefault();
     const question = text.trim();
-    if (!question || pending) return;
+    if (!question || blocked) return;
     onSend(question);
     setText("");
   }
@@ -57,19 +61,14 @@ export default function Composer({ onSend, onStop, pending }) {
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="Ask the operations database"
+        placeholder={busy ? "Waiting for the answer…" : "Ask the operations database"}
         aria-label="Your question"
         maxLength={1000}
+        disabled={disabled}
       />
-      {pending ? (
-        <button type="button" className="icon-button stop" onClick={onStop} aria-label="Stop">
-          <StopIcon />
-        </button>
-      ) : (
-        <button type="submit" className="icon-button send" disabled={!text.trim()} aria-label="Send">
-          <SendIcon />
-        </button>
-      )}
+      <button type="submit" className="icon-button send" disabled={blocked || !text.trim()} aria-label="Send">
+        <SendIcon />
+      </button>
     </form>
   );
 }

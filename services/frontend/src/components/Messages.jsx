@@ -1,7 +1,9 @@
 /**
- * The three kinds of chat rows:
+ * Chat rows, rendered from messages in the API's shape (as stored in Postgres):
+ *   { id, role: "user"|"assistant", content, status: "pending"|"complete"|"error", payload, latency_ms }
+ *
  *   UserMessage      - the question, right-aligned in a rounded bubble
- *   AssistantMessage - sparkle avatar + Markdown answer + stats + "Show SQL & data"
+ *   AssistantMessage - picks its look from `status`: thinking / error / answer
  *   ThinkingMessage  - spinning sparkle + shimmering lines while the agent works
  */
 import Markdown from "react-markdown";
@@ -10,42 +12,47 @@ import { SparkleIcon } from "./icons.jsx";
 import ResultDetails from "./ResultDetails.jsx";
 
 /**
- * @param {{text: string}} props
+ * @param {{message: {content: string}}} props
  */
-export function UserMessage({ text }) {
+export function UserMessage({ message }) {
   return (
     <div className="message user">
-      <div className="bubble">{text}</div>
+      <div className="bubble">{message.content}</div>
     </div>
   );
 }
 
 /**
- * An answer from the agent, or an error if the request failed.
+ * An answer from the agent.
+ *   pending  -> the thinking row (the reply is still being generated, maybe in another tab)
+ *   error    -> the saved error text, in red
+ *   complete -> markdown answer + stats + "Show SQL & data"
  *
- * react-markdown turns the LLM's Markdown (bullets, **bold**, tables via remark-gfm)
- * into React elements. It never renders raw HTML, so text that came from the
- * database can't inject scripts into the page.
+ * The answer text is `content`; the agent's details (SQL, rows, steps) are in
+ * payload.result, which ResultDetails already understands. react-markdown never renders
+ * raw HTML, so text that came from the database can't inject scripts into the page.
  *
- * @param {{message: {result?: object, error?: string, durationMs?: number}}} props
+ * @param {{message: object}} props
  */
 export function AssistantMessage({ message }) {
-  const { result, error, durationMs } = message;
+  if (message.status === "pending") return <ThinkingMessage />;
+
+  const result = message.payload?.result;
   return (
     <div className="message assistant">
       <div className="avatar">
         <SparkleIcon />
       </div>
       <div className="content">
-        {error ? (
-          <p className="error-text">{error}</p>
+        {message.status === "error" ? (
+          <p className="error-text">{message.content}</p>
         ) : (
           <>
             <div className="markdown">
-              <Markdown remarkPlugins={[remarkGfm]}>{result.answer}</Markdown>
+              <Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
             </div>
-            <Stats result={result} durationMs={durationMs} />
-            {result.sql && <ResultDetails result={result} />}
+            {result && <Stats result={result} latencyMs={message.latency_ms} />}
+            {result?.sql && <ResultDetails result={result} />}
           </>
         )}
       </div>
@@ -53,7 +60,7 @@ export function AssistantMessage({ message }) {
   );
 }
 
-/** Placeholder row shown while waiting for the API: Gemini-style shimmer lines. */
+/** Placeholder row shown while a reply is being generated: Gemini-style shimmer lines. */
 export function ThinkingMessage() {
   return (
     <div className="message assistant" aria-live="polite">
@@ -73,9 +80,9 @@ export function ThinkingMessage() {
 /**
  * One line of small "chips" summarising how the answer was produced.
  *
- * @param {{result: object, durationMs: number}} props
+ * @param {{result: object, latencyMs: number|null}} props - latencyMs = server-side time for the reply.
  */
-function Stats({ result, durationMs }) {
+function Stats({ result, latencyMs }) {
   const attempts = `${result.attempts} attempt${result.attempts === 1 ? "" : "s"}`;
   return (
     <div className="stats">
@@ -84,7 +91,7 @@ function Stats({ result, durationMs }) {
       </span>
       <span className={result.attempts > 1 ? "chip warn" : "chip"}>{attempts}</span>
       {result.success && <span className="chip">{result.rows.length} rows</span>}
-      <span className="chip">{(durationMs / 1000).toFixed(1)} s</span>
+      {latencyMs != null && <span className="chip">{(latencyMs / 1000).toFixed(1)} s</span>}
     </div>
   );
 }

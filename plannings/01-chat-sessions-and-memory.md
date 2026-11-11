@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Planned 2026-11-11. S0 + S1 done 2026-11-11 (dev session); next: S2. |
+| **Status** | Planned 2026-11-11. S0–S4 done 2026-11-12 (dev session); S5 (LLM titles) not started. |
 | **Written in** | a planning-only session. No code was changed. |
 | **Implement in** | a development session, stage by stage (Section 10). |
 | **Replaces** | an earlier draft with users and login. **Dropped by the user's decision:** no users, no login, no per-user history. |
@@ -326,7 +326,7 @@ Rough effort: S1 ½ day · S2 1 day · S3 ½ day · S4 1–1½ days · S5 1–2 
 ### [x] S0 — Housekeeping  (already committed + pushed before this plan: 607b471, 14cef23, 9ca421c)
 Commit the pending chat-UI work (frontend + `main.py`), which is uncommitted as of 2026-11-11, so this work starts from a clean tree.
 
-### [x] S1 — Database foundations  (done 2026-11-11, not committed yet)
+### [x] S1 — Database foundations  (done 2026-11-11, commit 9fef9f2)
 - `scripts/db/03_app_schema.sh` (4.1); `docker-compose.yml` env; `.env.example`:
   `APP_DB_PASSWORD=...`, `APP_DATABASE_URL=postgresql://app_rw:...@localhost:5432/ops_platform`, `CHAT_MEMORY_TURNS=3`
 - `app/config.py`: `app_database_url` (required), `chat_memory_turns: int = 3`
@@ -339,7 +339,7 @@ Acceptance: after `./scripts/reset_db.sh` and starting the API, DBeaver shows `a
 Restarting the API changes nothing. As `readonly_agent`, `SELECT 1 FROM app.chat_messages` fails with
 *permission denied for schema app*.
 
-### [ ] S2 — Sessions and transcript API (no memory yet)
+### [x] S2 — Sessions and transcript API (no memory yet)  (done 2026-11-12)
 - `app/chat/models.py`: Pydantic `Session`, `Message`, `ChatRequest`, `ChatResponse`, `RenameRequest`
 - `app/chat/store.py`: methods `create_session, list_sessions, get_session, rename_session, delete_session, claim_session,
   release_session, add_turn (user + pending assistant, one transaction), complete_message, fail_message, list_messages,
@@ -351,7 +351,7 @@ Restarting the API changes nothing. As `readonly_agent`, `SELECT 1 FROM app.chat
 Acceptance (in `/docs`): first message with `session_id: null` creates a chat; the second message with that ID appends to it.
 Restart the API: `GET /messages` still shows both turns. Delete removes the chat and its messages.
 
-### [ ] S3 — Agent memory
+### [x] S3 — Agent memory  (done 2026-11-12)
 - `app/chat/memory.py`: `ConversationTurn`, `load_history(store, session_id, max_turns)`, `format_history(turns) -> str`
   (answer cut to ~300 chars; empty string for no turns)
 - `app/agents/db/models.py`: `DBAgentState.history: str`
@@ -363,7 +363,7 @@ Restart the API: `GET /messages` still shows both turns. Delete removes the chat
 Acceptance: in one chat, ask "Which vendors have overdue invoices?" then "only the ones in India". The second SQL filters
 `country = 'India'` *and* overdue. In a **different** chat, "only the ones in India" gets no memory of the first chat.
 
-### [ ] S4 — Frontend sessions
+### [x] S4 — Frontend sessions  (done 2026-11-12)
 Section 8. Acceptance:
 - Create two chats (invoices and contracts) and switch back and forth; each continues with its own memory.
 - Reload on `/c/<id>`: the same chat comes back.
@@ -424,3 +424,21 @@ records the `history` it received: no Groq calls in tests. Each test deletes the
 | 3 | Titles | First question cut to 60 chars; LLM title is optional stage S5 |
 | 4 | Delete | Hard delete with a confirm dialog (no trash / undo) |
 | 5 | A session's agent | Not fixed; each message is routed (DB agent only until Phase 2) |
+
+## 14. Implementation notes from the development session (2026-11-12)
+Where the code differs from the plan above, and why:
+1. **Agent crash → HTTP 200, not 502.** The failed answer is saved as an `error` message and returned as a normal
+   `ChatResponse`. The UI renders exactly what a reload would show, and a new chat still gets its `session_id`
+   (a 502 body wouldn't carry it).
+2. **Table names are schema-qualified** (`app.chat_sessions`) in every query, in addition to `search_path = app`,
+   so tables can never be created in `public` by accident.
+3. **`fail_stale_pending()` was built in S1** (the S1 lifespan needs it); `recent_complete_messages()` (memory query)
+   lives in `store.py` with the other SQL, and `memory.py` pairs the rows.
+4. **API tests use `dependency_overrides`, not `asgi-lifespan`:** `get_chat_store` and `get_db_agent` are overridden,
+   so the lifespan isn't needed. Only `httpx` was added as a dev dependency.
+5. **No stop button** in the composer: the server finishes and saves the answer anyway. The composer is disabled while
+   the open chat is answering; other chats stay usable.
+6. **Sidebar "busy" dot:** the chat page refreshes the list ~0.4 s after sending, and App re-polls the list every 3 s
+   while any chat `is_running`.
+7. **Rename doesn't bump `updated_at`** (renaming isn't activity, so the chat doesn't jump to the top).
+8. **Answer prompt rule added:** when history is shown, facts must come from the new rows, not from earlier answers.
