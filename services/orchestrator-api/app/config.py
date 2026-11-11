@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     # The DB agent only ever gets the read-only URL (defense in depth, see project plan 3-B).
     # Required: no default, so a missing value fails at startup, not on the first question.
     readonly_database_url: str
+    # Chat sessions and messages live in schema `app`, reached only through the app_rw user.
+    app_database_url: str
+
+    # --- Chat memory ---
+    # Previous question/answer exchanges of the same chat that the agent sees (constant prompt cost per turn).
+    chat_memory_turns: int = 3
 
 
 @lru_cache
