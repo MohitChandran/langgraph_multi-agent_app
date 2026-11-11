@@ -276,6 +276,9 @@ Rule: Claude writes the code and explains every file/function; interview prep ha
            [x] 3. schema.py (reflection) + database.py (async read-only pool) + 11 tests (9 integration)
            [x] 4. LangGraph workflow (write/validate/execute/answer + retry loop) + CLI + 6 fake-LLM tests
            [ ] 5. 25-question SQL eval (execution accuracy) + first report
+           [x] extra: minimal Gemini-style chat UI (services/frontend) + FastAPI POST /api/db/ask
+               (built early on request for manual testing; Phase 2 adds the orchestrator + streaming,
+               Phase 7 adds upload + approval UI)
     Learn: structured output prompting, SQL safety, measuring an LLM component.
 
 [ ] Phase 2 — Orchestrator v1

@@ -17,6 +17,21 @@ uv sync
 uv run python -m app.llm          # Groq hello-world: lists models, calls both tiers
 ```
 
+## Chat UI (for testing the agents)
+
+Two terminals, from the repo root:
+
+```bash
+# 1. API (FastAPI + DB agent) on http://localhost:8000  (API docs: /docs)
+cd services/orchestrator-api && uv run uvicorn app.main:app --reload --port 8000
+
+# 2. Frontend (React + Vite) on http://localhost:5173
+cd services/frontend && npm install && npm run dev
+```
+
+Open http://localhost:5173 and ask a question. Under each answer, "Show SQL & data" shows the
+workflow steps that ran, the exact SQL and the returned rows. Vite forwards `/api/*` to port 8000.
+
 `reset_db.sh` can be re-run any time to get a clean database. The mock data is deterministic
 (same rows on every machine) and its dates are relative to today, so time-based questions
 ("invoices due this week") always have answers.
