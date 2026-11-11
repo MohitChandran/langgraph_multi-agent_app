@@ -18,17 +18,24 @@ from app.config import get_settings
 ModelTier = Literal["strong", "fast"]
 
 
-def get_llm(tier: ModelTier = "strong", temperature: float = 0.0) -> ChatGroq:
+def get_llm(tier: ModelTier = "strong", temperature: float = 0.0, max_tokens: int | None = None) -> ChatGroq:
     """Return a LangChain chat model backed by Groq.
 
     Args:
         tier: "strong" for reasoning-heavy steps (routing, SQL generation),
               "fast" for cheap high-volume steps (summaries, query rewrites).
         temperature: 0.0 = deterministic output, which we want for routing and SQL.
+        max_tokens: cap on the reply length. Groq's free tier limits OUTPUT tokens per
+            minute per model (e.g. 1,000 for some models) and rejects a request outright
+            if its max_tokens could exceed that, so short-answer calls should set it.
 
     The Groq SDK retries 429 (rate limit) and 5xx errors with exponential backoff
     up to `max_retries` times. That matters on Groq's free tier, which has
     per-minute rate limits.
+
+    reasoning_format="hidden": "thinking" models (Qwen3, gpt-oss) reason before they
+    answer. "hidden" tells Groq to drop that reasoning from the reply, so text like
+    <think>...</think> can never leak into a SQL query or a user-facing answer.
     """
     settings = get_settings()
     model = settings.groq_strong_model if tier == "strong" else settings.groq_fast_model
@@ -36,8 +43,10 @@ def get_llm(tier: ModelTier = "strong", temperature: float = 0.0) -> ChatGroq:
         model=model,
         api_key=settings.groq_api_key,
         temperature=temperature,
+        max_tokens=max_tokens,
         max_retries=settings.llm_max_retries,
         timeout=settings.llm_timeout_seconds,
+        reasoning_format="hidden",
     )
 
 
