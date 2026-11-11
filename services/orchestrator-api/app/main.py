@@ -1,8 +1,11 @@
 """FastAPI entrypoint: exposes the agents over HTTP so a browser UI can use them.
 
-For now there is one real endpoint, POST /api/db/ask, which runs the DB agent directly.
+Endpoints:
+  - /api/chat, /api/sessions/...  chat sessions with saved history and memory (app/chat/routes.py)
+  - POST /api/db/ask              one-off question to the DB agent, nothing saved (CLI, debugging, evals)
+  - GET /api/health               liveness check
 In Phase 2 this grows into the gateway for the LangGraph orchestrator (streaming,
-sessions, file uploads, HITL resume).
+file uploads, HITL resume).
 
 Run it (from services/orchestrator-api):
     uv run uvicorn app.main:app --reload --port 8000
@@ -13,15 +16,17 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from app.agents.db.database import ReadOnlyDatabase
 from app.agents.db.graph import DBAgent
 from app.agents.db.models import DBAgentResult
 from app.agents.db.schema import load_schema
+from app.chat.routes import router as chat_router
 from app.chat.store import ChatStore
 from app.config import get_settings
+from app.dependencies import DBAgentDep
 
 # Uvicorn only configures its own loggers; without this, messages from our app.* modules are dropped.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s - %(message)s")
@@ -58,6 +63,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Multi-Agent Ops Platform API", version="0.1.0", lifespan=lifespan)
+app.include_router(chat_router)  # /api/chat and /api/sessions/... (app/chat/routes.py)
 
 
 class AskRequest(BaseModel):
@@ -73,14 +79,13 @@ async def health() -> dict[str, str]:
 
 
 @app.post("/api/db/ask")
-async def ask_db(body: AskRequest, request: Request) -> DBAgentResult:
-    """Run the DB agent on one question and return the answer, SQL, rows and workflow steps.
+async def ask_db(body: AskRequest, agent: DBAgentDep) -> DBAgentResult:
+    """Run the DB agent on one question, with no chat and no memory (for the CLI, debugging and evals).
 
-    The agent already turns bad SQL and database errors into a normal answer (via its
-    retry loop). Anything else, e.g. Groq being unreachable or rate-limited after all
-    retries, becomes a 502 with a short message the UI can show, and is logged in full.
+    Returns the answer, SQL, rows and workflow steps; nothing is saved. The agent already
+    turns bad SQL and database errors into a normal answer (via its retry loop). Anything
+    else, e.g. Groq unreachable after all retries, becomes a 502 and is logged in full.
     """
-    agent: DBAgent = request.app.state.db_agent
     try:
         return await agent.ask(body.question.strip())
     except Exception as error:

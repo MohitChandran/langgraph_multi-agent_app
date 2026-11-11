@@ -13,13 +13,20 @@ This pool is deliberately different from the DB agent's ReadOnlyDatabase:
 
 Tables are created here at startup with CREATE TABLE IF NOT EXISTS: running it on every
 start is harmless (idempotent), so we need no migration framework yet.
+
+Every query below reads through one of the two indexes, so each costs a handful of row
+reads whether there are 10 chats or 10,000 (plan 01, section 9).
 """
 
 from typing import Any
+from uuid import UUID
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
+
+from app.chat.models import Message, MessagePage, Session
 
 # Table names are always written schema-qualified (app.chat_sessions), even though app_rw's
 # search_path is `app`: if the code were ever pointed at the wrong user, tables could then
@@ -61,6 +68,12 @@ SCHEMA_STATEMENTS = (
 )
 
 STALE_PENDING_MINUTES = 10  # a reply still 'pending' after this long was interrupted (API crash/restart)
+CLAIM_TIMEOUT_MINUTES = 5  # a "busy" flag older than this belongs to a crashed run and can be taken over
+MAX_SESSIONS_LISTED = 100
+
+# Column lists shared by the queries below, so every query returns exactly the model's fields.
+SESSION_COLUMNS = "id, title, message_count, created_at, updated_at, active_run_at IS NOT NULL AS is_running"
+MESSAGE_COLUMNS = "id, role, content, status, payload, latency_ms, created_at"
 
 
 class ChatStore:
@@ -102,6 +115,8 @@ class ChatStore:
         """Close the pool when leaving the `async with` block, even after an error."""
         await self.close()
 
+    # ------------------------------------------------------------ setup
+
     async def setup(self) -> None:
         """Create the chat tables and indexes if they don't exist yet. Safe to run on every startup.
 
@@ -137,8 +152,155 @@ class ChatStore:
             )
             return cursor.rowcount
 
+    # --------------------------------------------------------- sessions
+
+    async def create_session(self, title: str) -> Session:
+        """Insert a new, empty conversation and return it. Postgres generates the UUID."""
+        row = await self.fetch_one(
+            f"INSERT INTO app.chat_sessions (title) VALUES (%s) RETURNING {SESSION_COLUMNS}", (title,)
+        )
+        return Session(**row)
+
+    async def list_sessions(self, limit: int = MAX_SESSIONS_LISTED) -> list[Session]:
+        """Return conversations, most recently active first (the sidebar)."""
+        rows = await self._fetch_all(
+            f"SELECT {SESSION_COLUMNS} FROM app.chat_sessions ORDER BY updated_at DESC LIMIT %s", (limit,)
+        )
+        return [Session(**row) for row in rows]
+
+    async def get_session(self, session_id: UUID) -> Session | None:
+        """Return one conversation, or None if it doesn't exist."""
+        row = await self.fetch_one(f"SELECT {SESSION_COLUMNS} FROM app.chat_sessions WHERE id = %s", (session_id,))
+        return Session(**row) if row else None
+
+    async def rename_session(self, session_id: UUID, title: str) -> Session | None:
+        """Change a conversation's title. Returns None if it doesn't exist.
+
+        Deliberately doesn't touch updated_at: renaming isn't "activity", so the
+        chat shouldn't jump to the top of the sidebar.
+        """
+        row = await self.fetch_one(
+            f"UPDATE app.chat_sessions SET title = %s WHERE id = %s RETURNING {SESSION_COLUMNS}", (title, session_id)
+        )
+        return Session(**row) if row else None
+
+    async def delete_session(self, session_id: UUID) -> bool:
+        """Delete a conversation; its messages go with it (ON DELETE CASCADE). False if it didn't exist."""
+        row = await self.fetch_one("DELETE FROM app.chat_sessions WHERE id = %s RETURNING id", (session_id,))
+        return row is not None
+
+    async def claim_session(self, session_id: UUID) -> Session | None:
+        """Mark the conversation busy, so only one reply is generated at a time. None = couldn't claim.
+
+        ONE conditional UPDATE does the check and the change together (atomically): if two
+        requests race, Postgres lets exactly one of them match the WHERE clause. A separate
+        "SELECT, then UPDATE" would let both see "not busy" and both proceed.
+        A claim older than CLAIM_TIMEOUT_MINUTES belongs to a crashed run, so it may be taken over.
+        """
+        row = await self.fetch_one(
+            f"""
+            UPDATE app.chat_sessions SET active_run_at = now()
+            WHERE id = %s
+              AND (active_run_at IS NULL OR active_run_at < now() - make_interval(mins => %s))
+            RETURNING {SESSION_COLUMNS}
+            """,
+            (session_id, CLAIM_TIMEOUT_MINUTES),
+        )
+        return Session(**row) if row else None
+
+    async def release_session(self, session_id: UUID) -> Session | None:
+        """Clear the busy flag and bump updated_at (the chat moves to the top of the sidebar)."""
+        row = await self.fetch_one(
+            f"UPDATE app.chat_sessions SET active_run_at = NULL, updated_at = now() WHERE id = %s"
+            f" RETURNING {SESSION_COLUMNS}",
+            (session_id,),
+        )
+        return Session(**row) if row else None
+
+    # --------------------------------------------------------- messages
+
+    async def add_turn(self, session_id: UUID, question: str) -> tuple[Message, Message]:
+        """Save the question and an empty 'pending' answer, in ONE transaction. Returns both messages.
+
+        Saving BEFORE the agent runs means a closed tab or a crash never loses the question,
+        and the pending row tells a reloaded UI that the answer is still coming.
+        The transaction makes the three writes all-or-nothing: no question without its
+        answer slot, and message_count always matches the real number of messages.
+        """
+        async with self._pool.connection() as conn, conn.transaction():
+            user = await (
+                await conn.execute(
+                    f"INSERT INTO app.chat_messages (session_id, role, content) VALUES (%s, 'user', %s)"
+                    f" RETURNING {MESSAGE_COLUMNS}",
+                    (session_id, question),
+                )
+            ).fetchone()
+            assistant = await (
+                await conn.execute(
+                    f"INSERT INTO app.chat_messages (session_id, role, status) VALUES (%s, 'assistant', 'pending')"
+                    f" RETURNING {MESSAGE_COLUMNS}",
+                    (session_id,),
+                )
+            ).fetchone()
+            await conn.execute(
+                "UPDATE app.chat_sessions SET message_count = message_count + 2, updated_at = now() WHERE id = %s",
+                (session_id,),
+            )
+        return Message(**user), Message(**assistant)
+
+    async def complete_message(
+        self, message_id: int, content: str, payload: dict[str, Any], latency_ms: int
+    ) -> Message | None:
+        """Fill in a pending answer: its text, the agent's result (payload) and how long it took.
+
+        Returns None if the message no longer exists (its chat was deleted while the agent ran).
+        """
+        row = await self.fetch_one(
+            f"UPDATE app.chat_messages SET content = %s, payload = %s, latency_ms = %s, status = 'complete'"
+            f" WHERE id = %s RETURNING {MESSAGE_COLUMNS}",
+            (content, Jsonb(payload), latency_ms, message_id),
+        )
+        return Message(**row) if row else None
+
+    async def fail_message(self, message_id: int, content: str, latency_ms: int) -> Message | None:
+        """Mark a pending answer as failed, with a short readable error as its text. None if it's gone."""
+        row = await self.fetch_one(
+            f"UPDATE app.chat_messages SET content = %s, latency_ms = %s, status = 'error'"
+            f" WHERE id = %s RETURNING {MESSAGE_COLUMNS}",
+            (content, latency_ms, message_id),
+        )
+        return Message(**row) if row else None
+
+    async def list_messages(self, session_id: UUID, limit: int = 100, before: int | None = None) -> MessagePage:
+        """Return up to `limit` messages, oldest to newest. With `before`, only messages older than that id.
+
+        The "LIMIT n + 1" trick: we fetch one extra row. If it comes back, there are older
+        messages (has_more=True) and we drop it; no COUNT(*) query needed.
+        Rows are read newest-first (fast, via the index) and reversed for display.
+        """
+        if before is None:
+            query = f"SELECT {MESSAGE_COLUMNS} FROM app.chat_messages WHERE session_id = %s ORDER BY id DESC LIMIT %s"
+            params: tuple[Any, ...] = (session_id, limit + 1)
+        else:
+            query = (
+                f"SELECT {MESSAGE_COLUMNS} FROM app.chat_messages WHERE session_id = %s AND id < %s"
+                f" ORDER BY id DESC LIMIT %s"
+            )
+            params = (session_id, before, limit + 1)
+        rows = await self._fetch_all(query, params)
+        has_more = len(rows) > limit
+        return MessagePage(items=[Message(**row) for row in reversed(rows[:limit])], has_more=has_more)
+
+    # ---------------------------------------------------------- helpers
+
     async def fetch_one(self, query: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
-        """Run one query and return its first row (or None). Used by tests and later stages."""
+        """Run one statement and return its first row as a dict (or None). Also used by tests."""
         async with self._pool.connection() as conn:
             cursor = await conn.execute(query, params)
             return await cursor.fetchone()
+
+    async def _fetch_all(self, query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+        """Run one statement and return all rows as dicts."""
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute(query, params)
+            return await cursor.fetchall()
