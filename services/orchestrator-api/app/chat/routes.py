@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.chat.models import ChatRequest, ChatResponse, MessagePage, RenameRequest, Session
 from app.chat.service import SessionBusyError, SessionNotFoundError, send_message
+from app.config import get_settings
 from app.dependencies import ChatStoreDep, DBAgentDep
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -27,10 +28,12 @@ router = APIRouter(prefix="/api", tags=["chat"])
 async def chat(body: ChatRequest, store: ChatStoreDep, agent: DBAgentDep) -> ChatResponse:
     """Send one message and wait for the answer. Both are saved before this returns.
 
+    The agent sees the last CHAT_MEMORY_TURNS exchanges of this chat as memory.
     404: the session doesn't exist. 409: this chat is still answering a previous message.
     """
+    memory_turns = get_settings().chat_memory_turns
     try:
-        return await send_message(store, agent, body.session_id, body.content.strip())
+        return await send_message(store, agent, body.session_id, body.content.strip(), memory_turns)
     except SessionNotFoundError as error:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from error
     except SessionBusyError as error:

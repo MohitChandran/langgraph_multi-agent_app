@@ -222,6 +222,52 @@ async def test_rename_keeps_sidebar_order_and_delete_removes_messages(
     assert left["n"] == 0  # ON DELETE CASCADE
 
 
+# ------------------------------------------------------------------ memory (stage S3)
+
+
+def remembered_questions(fake_agent: FakeAgent) -> list[str]:
+    """The questions in the history the agent received on its LAST call, without the test prefix."""
+    return [turn.question.removeprefix(f"{TEST_PREFIX} ") for turn in fake_agent.calls[-1]["history"]]
+
+
+@pytest.mark.integration
+async def test_agent_sees_only_the_last_3_exchanges_and_never_the_new_question(
+    client: httpx.AsyncClient, fake_agent: FakeAgent
+) -> None:
+    """After 5 turns, turn 6 gets exactly turns 3-5 (oldest first), each with its SQL; not turn 6 itself."""
+    session_id = (await send(client, "q1")).json()["session"]["id"]
+    assert fake_agent.calls[0]["history"] == []  # a new chat starts with no memory
+    for n in range(2, 7):
+        await send(client, f"q{n}", session_id)
+
+    assert remembered_questions(fake_agent) == ["q3", "q4", "q5"]
+    assert all(turn.sql and turn.sql.startswith("SELECT") for turn in fake_agent.calls[-1]["history"])
+
+
+@pytest.mark.integration
+async def test_failed_turns_are_not_remembered(client: httpx.AsyncClient, fake_agent: FakeAgent) -> None:
+    """A turn whose answer failed (status 'error') is left out of memory."""
+    session_id = (await send(client, "good question")).json()["session"]["id"]
+    fake_agent.crash = True
+    await send(client, "crashing question", session_id)
+    fake_agent.crash = False
+    await send(client, "follow-up", session_id)
+
+    assert remembered_questions(fake_agent) == ["good question"]
+
+
+@pytest.mark.integration
+async def test_memory_is_isolated_per_chat(client: httpx.AsyncClient, fake_agent: FakeAgent) -> None:
+    """Chat B never sees chat A's turns, even right after them."""
+    chat_a = (await send(client, "invoices question")).json()["session"]["id"]
+    await send(client, "invoices follow-up", chat_a)
+
+    chat_b = (await send(client, "contracts question")).json()["session"]["id"]
+    assert fake_agent.calls[-1]["history"] == []
+    await send(client, "contracts follow-up", chat_b)
+    assert remembered_questions(fake_agent) == ["contracts question"]
+
+
 def test_make_title_cuts_long_questions_at_a_word() -> None:
     """Short questions are kept; long ones are cut to 60 chars at a word boundary with an ellipsis."""
     assert make_title("Which vendors   have\noverdue invoices?") == "Which vendors have overdue invoices?"

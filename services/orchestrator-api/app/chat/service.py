@@ -2,10 +2,11 @@
 
     1  no session_id?  create the session (a chat is created by its first message)
     2  claim the session: one reply at a time per chat (404 if unknown, 409 if busy)
-    3  save the question + a 'pending' answer slot, in one transaction
-    4  run the agent
-    5  save the answer (or the error) into that slot
-    6  ALWAYS release the claim (finally), so a crash can't leave the chat stuck "busy"
+    3  load memory: the last few exchanges of THIS chat (before saving the new question!)
+    4  save the question + a 'pending' answer slot, in one transaction
+    5  run the agent with the question and the memory
+    6  save the answer (or the error) into that slot
+    7  ALWAYS release the claim (finally), so a crash can't leave the chat stuck "busy"
 
 This module knows nothing about HTTP: routes.py turns its exceptions into status codes.
 It takes the store and the agent as parameters, so tests pass a fake agent.
@@ -19,6 +20,7 @@ from uuid import UUID
 import psycopg
 
 from app.agents.db.models import DBAgentResult
+from app.chat.memory import ConversationTurn, load_history
 from app.chat.models import ChatResponse, Message
 from app.chat.store import ChatStore
 
@@ -43,8 +45,8 @@ class ChatAgent(Protocol):
     method fits, without inheriting from anything. DBAgent fits; so does a test fake.
     """
 
-    async def ask(self, question: str) -> DBAgentResult:
-        """Answer one question."""
+    async def ask(self, question: str, history: list[ConversationTurn] | None = None) -> DBAgentResult:
+        """Answer one question, using the earlier exchanges of the chat as context."""
         ...
 
 
@@ -57,8 +59,12 @@ def make_title(content: str) -> str:
     return cut.rstrip(" ,.;:") + "…"
 
 
-async def send_message(store: ChatStore, agent: ChatAgent, session_id: UUID | None, content: str) -> ChatResponse:
+async def send_message(
+    store: ChatStore, agent: ChatAgent, session_id: UUID | None, content: str, memory_turns: int = 3
+) -> ChatResponse:
     """Run one turn and return the session plus the saved question and answer.
+
+    `memory_turns` = how many earlier exchanges of this chat the agent sees (CHAT_MEMORY_TURNS).
 
     If the agent itself crashes (e.g. Groq unreachable after its retries), the answer is
     saved with status 'error' and a readable text, and the turn still returns normally:
@@ -77,13 +83,15 @@ async def send_message(store: ChatStore, agent: ChatAgent, session_id: UUID | No
         raise SessionBusyError("A reply is still being generated in this chat.")
 
     try:
+        # Memory first: once the question is saved, it would show up in its own history.
+        history = await load_history(store, session_id, memory_turns)
         try:
             user_message, pending = await store.add_turn(session_id, content)
         except psycopg.errors.ForeignKeyViolation as error:  # deleted between claim and insert
             raise SessionNotFoundError(f"Chat {session_id} was deleted.") from error
 
         started = time.perf_counter()
-        assistant_message = await _run_agent(store, agent, pending, content, started)
+        assistant_message = await _run_agent(store, agent, pending, content, history, started)
     finally:
         session = await store.release_session(session_id)
 
@@ -93,7 +101,12 @@ async def send_message(store: ChatStore, agent: ChatAgent, session_id: UUID | No
 
 
 async def _run_agent(
-    store: ChatStore, agent: ChatAgent, pending: Message, question: str, started: float
+    store: ChatStore,
+    agent: ChatAgent,
+    pending: Message,
+    question: str,
+    history: list[ConversationTurn],
+    started: float,
 ) -> Message | None:
     """Ask the agent and fill the pending answer with its result, or with an error if it crashed.
 
@@ -103,7 +116,7 @@ async def _run_agent(
     Returns None if the message vanished (its chat was deleted while the agent ran).
     """
     try:
-        result = await agent.ask(question)
+        result = await agent.ask(question, history)
     except Exception:
         logger.exception("Agent failed for message %s", pending.id)
         return await store.fail_message(pending.id, AGENT_FAILED_TEXT, _elapsed_ms(started))

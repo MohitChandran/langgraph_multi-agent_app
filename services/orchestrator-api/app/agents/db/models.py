@@ -40,6 +40,7 @@ class DBAgentState(TypedDict, total=False):
     """
 
     question: str  # the user's question (input)
+    history: str  # recent conversation of this chat, already formatted for the prompt ("" = none)
     draft: SQLDraft | None  # latest SQL written by the LLM (None if the LLM call failed)
     query: ValidatedQuery  # the draft after it passed the safety gate
     result: QueryResult  # rows returned by Postgres

@@ -291,6 +291,23 @@ class ChatStore:
         has_more = len(rows) > limit
         return MessagePage(items=[Message(**row) for row in reversed(rows[:limit])], has_more=has_more)
 
+    async def recent_complete_messages(self, session_id: UUID, limit: int) -> list[dict[str, Any]]:
+        """The newest `limit` COMPLETE messages of a session, newest first: the raw material for memory.
+
+        Returns only what memory needs (role, content, the SQL from the payload), never rows.
+        Failed or pending answers are excluded so they don't pollute the agent's memory.
+        """
+        return await self._fetch_all(
+            """
+            SELECT role, content, payload->'result'->>'sql' AS sql
+            FROM app.chat_messages
+            WHERE session_id = %s AND status = 'complete'
+            ORDER BY id DESC
+            LIMIT %s
+            """,
+            (session_id, limit),
+        )
+
     # ---------------------------------------------------------- helpers
 
     async def fetch_one(self, query: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:

@@ -39,6 +39,7 @@ from app.agents.db.models import DBAgentResult, DBAgentState, SQLDraft
 from app.agents.db.prompts import ANSWER_PROMPT, REPAIR_SQL_PROMPT, WRITE_SQL_PROMPT
 from app.agents.db.safety import SQLValidationError, validate_sql
 from app.agents.db.schema import DatabaseSchema, load_schema
+from app.chat.memory import ConversationTurn, format_history
 from app.config import get_settings
 from app.llm import get_llm
 
@@ -98,8 +99,14 @@ class DBAgent:
         builder.add_edge("answer", END)
         return builder.compile()
 
-    async def ask(self, question: str) -> DBAgentResult:
+    async def ask(self, question: str, history: list[ConversationTurn] | None = None) -> DBAgentResult:
         """Run the whole workflow for one question and package the final state as a DBAgentResult.
+
+        Args:
+            question: the new question.
+            history: earlier exchanges of the same chat (memory), oldest first. None or []
+                means no memory: the CLI, /api/db/ask and the eval call it like that.
+                It's formatted into prompt text ONCE here, not again in every node.
 
         Uses astream (not ainvoke) so we can also record WHICH nodes ran, in order:
         "updates" events name the node that just finished ({node_name: changes}),
@@ -107,7 +114,7 @@ class DBAgent:
         """
         steps: list[str] = []
         state: DBAgentState = {}
-        initial: DBAgentState = {"question": question, "attempts": 0}
+        initial: DBAgentState = {"question": question, "history": format_history(history or []), "attempts": 0}
         async for mode, chunk in self.graph.astream(initial, stream_mode=["updates", "values"]):
             if mode == "updates":
                 steps.extend(chunk)
@@ -139,7 +146,12 @@ class DBAgent:
         lets the model fix the real problem instead of guessing again.
         """
         attempts = state.get("attempts", 0) + 1
-        values = {"schema": self._schema_text, "today": date.today().isoformat(), "question": state["question"]}
+        values = {
+            "schema": self._schema_text,
+            "today": date.today().isoformat(),
+            "history": state.get("history", ""),
+            "question": state["question"],
+        }
         if state.get("error") and state.get("draft"):
             messages = REPAIR_SQL_PROMPT.format_messages(
                 **values, previous_sql=state["draft"].sql, error=state["error"]
@@ -191,6 +203,7 @@ class DBAgent:
         if len(rows_json) > MAX_ROWS_CHARS:
             rows_json = rows_json[:MAX_ROWS_CHARS] + " ... [truncated]"
         messages = ANSWER_PROMPT.format_messages(
+            history=state.get("history", ""),
             question=state["question"],
             explanation=draft.explanation,
             hit_row_limit=result.hit_row_limit,

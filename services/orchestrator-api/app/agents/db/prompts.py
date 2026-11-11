@@ -5,6 +5,9 @@ the eval) without touching any logic.
 
 ChatPromptTemplate fills {placeholders} with values at call time. Values are
 inserted as plain text, so curly braces inside the schema or the JSON rows are safe.
+
+{history} is the chat's recent conversation (app/chat/memory.py: format_history), or ""
+for a first question or a one-off /api/db/ask call: then the prompts are unchanged.
 """
 
 from langchain_core.prompts import ChatPromptTemplate
@@ -29,12 +32,14 @@ Rules:
 - Dates: use current_date. "This week" = from current_date up to date_trunc('week', current_date)::date + 6.
   "Last quarter" = the previous calendar quarter; use date_trunc('quarter', ...).
 - For "top", "most", "highest" questions use ORDER BY with a LIMIT. Never return more than 100 rows.
-- If the question cannot be answered from these tables, set can_answer to false and explain why."""
+- If the question cannot be answered from these tables, set can_answer to false and explain why.
+- The question may refer to earlier turns of the conversation ("those", "only India", "same for last month"):
+  resolve it using the conversation and the previous SQL. If it's a new topic, ignore the conversation."""
 
-WRITE_SQL_HUMAN = "Question: {question}"
+WRITE_SQL_HUMAN = "{history}Question: {question}"
 
 # Added on a retry: the model sees exactly what it wrote and why it failed.
-REPAIR_SQL_HUMAN = """Question: {question}
+REPAIR_SQL_HUMAN = """{history}Question: {question}
 
 Your previous query:
 {previous_sql}
@@ -53,9 +58,11 @@ Rules:
 - Always state the currency next to amounts. Format large numbers with thousands separators.
 - If the results were cut off at the row limit, say that only the first rows are shown.
 - Be concise: one or two sentences, or a short bullet list when listing more than 3 items.
-- Do not mention SQL, tables or columns unless the user asked about them."""
+- Do not mention SQL, tables or columns unless the user asked about them.
+- If a conversation is shown, use it only to understand what the question refers to.
+  The facts in your answer must come from the rows below, not from earlier answers."""
 
-ANSWER_HUMAN = """Question: {question}
+ANSWER_HUMAN = """{history}Question: {question}
 
 What the query does: {explanation}
 Row limit reached (more rows may exist): {hit_row_limit}
