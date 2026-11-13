@@ -45,6 +45,13 @@ NUMBERED_HEADING = re.compile(r"^(\d+|[A-Z])(\.\d+)*[.)]?\s")
 # A paragraph that is really a table caption ("Table 2: Vendor services ...").
 TABLE_CAPTION = re.compile(r"^Table\s+\w+[:.]", re.IGNORECASE)
 
+# Pictures whose text is mostly labels and numbers (axes, legends, boxes): the vision model
+# describes these; their OCR fragments would only add noise ("0 50 100 150 ...").
+CHART_LABELS = {"bar_chart", "line_chart", "pie_chart", "flow_chart", "scatter_chart", "heatmap", "map"}
+# A non-chart picture with at least this many OCR'd words is treated as a picture OF TEXT
+# (a scanned page, a screenshot of a letter): its text becomes normal text elements.
+MIN_PICTURE_TEXT_WORDS = 30
+
 TEXT_LABELS = {
     DocItemLabel.TEXT,
     DocItemLabel.PARAGRAPH,
@@ -120,7 +127,9 @@ def to_parsed_document(document: DoclingDocument, fallback_title: str, pictures_
         elif isinstance(item, PictureItem):
             pictures_per_page[page_start] = pictures_per_page.get(page_start, 0) + 1
             image_path = pictures_dir / f"p{page_start:03d}-{pictures_per_page[page_start]:02d}.png"
-            elements.append(_picture_element(item, document, page_start, page_end, image_path))
+            picture = _picture_element(item, document, page_start, page_end, image_path)
+            elements.append(picture)
+            elements.extend(_text_inside_picture(item, document, picture))
         elif isinstance(item, TextItem) and item.label in TEXT_LABELS and item.text.strip():
             elements.append(Element("text", item.text.strip(), page_start, page_end))
 
@@ -170,6 +179,26 @@ def _attach_table_captions(elements: list[Element]) -> list[Element]:
             element.text = result.pop().text
         result.append(element)
     return result
+
+
+def _text_inside_picture(item: PictureItem, document: DoclingDocument, picture: Element) -> list[Element]:
+    """The OCR'd text INSIDE a picture of text (e.g. a scanned page), as normal text elements.
+
+    Docling OCRs bitmaps, but when the layout model calls the region a picture, the words are
+    attached as the picture's children, which iterate_items() skips by default
+    (traverse_pictures=False). For charts that's right (their "text" is axis ticks). For a
+    scanned page it would lose the whole page, so text-heavy non-chart pictures get their text back.
+    """
+    if picture.picture_label in CHART_LABELS:
+        return []
+    inside = [
+        child
+        for child, _depth in document.iterate_items(root=item, traverse_pictures=True)
+        if isinstance(child, TextItem) and child.label in TEXT_LABELS and child.text.strip()
+    ]
+    if sum(len(child.text.split()) for child in inside) < MIN_PICTURE_TEXT_WORDS:
+        return []
+    return [Element("text", child.text.strip(), picture.page_start, picture.page_end) for child in inside]
 
 
 def _pages(item: object) -> tuple[int, int]:

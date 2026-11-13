@@ -36,6 +36,28 @@ Chats are saved in Postgres (schema `app`, see `plannings/01-chat-sessions-and-m
 sidebar lists them, each has its own URL (`/c/<id>`), and the agent remembers the last 3
 exchanges of the chat you're in (`CHAT_MEMORY_TURNS`), so follow-ups like "only the ones in India" work.
 
+### Documents (RAG agent)
+
+Attach a PDF, Word, PowerPoint, Markdown, text or image file with the paperclip (or drag it onto the chat).
+It is processed in the background (Docling parsing with OCR, chart descriptions by a vision model, chunking,
+embeddings in pgvector); a chip shows its progress. From then on that chat is answered by the Doc agent:
+hybrid search (vectors + keywords, fused with RRF, then reranked) and answers with numbered citations that
+open the PDF at the right page. Chats without documents keep using the DB agent.
+
+```bash
+uv run scripts/make_sample_docs.py      # test PDF with tables, charts, a diagram and a scanned page -> data/samples/
+cd services/orchestrator-api
+uv run python -m app.agents.doc.parsing ../../data/samples/q3-compliance-report.pdf --chunks   # parse + chunk
+uv run python -m app.agents.doc.retrieval "credit if AWS breaches the SLA"                     # every search stage
+uv run pytest -m slow                   # real-Docling tests (skipped by default)
+```
+
+The first API start downloads the embedding and rerank models (~0.3 GB) into `data/models/`.
+
+Two 7-page test documents (a scanned page, tables and charts) are in `evals/test_documents/`, with 14 verified
+questions and expected answers in `evals/datasets/test_documents_questions.json`. Regenerate them with
+`uv run evals/make_test_documents.py`.
+
 `reset_db.sh` can be re-run any time to get a clean database. The mock data is deterministic
 (same rows on every machine) and its dates are relative to today, so time-based questions
 ("invoices due this week") always have answers.

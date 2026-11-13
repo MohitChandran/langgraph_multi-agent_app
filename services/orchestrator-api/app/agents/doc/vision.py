@@ -36,7 +36,10 @@ SKIP_LABELS = {"logo", "signature", "stamp", "icon", "qr_code", "bar_code"}
 PRIORITY_LABELS = {"bar_chart", "line_chart", "pie_chart", "flow_chart", "table", "screenshot", "map"}
 MIN_SIDE_PX = 150
 MAX_ASPECT_RATIO = 8  # wider/taller than 8:1 without a caption = decorative strip
-VISION_MAX_TOKENS = 250  # ~180 words; also keeps us under Groq's output-tokens-per-minute limit
+# Enough for a dense multi-series chart (tested: 3 lines x 14 points = 42 values needs ~600 tokens in the
+# compact format). Groq's free tier allows ~1,000 output tokens/minute for this model, so 700 means
+# ~1.4 descriptions per minute (the plan had 250 = ~4/minute, but then dense charts were cut off).
+VISION_MAX_TOKENS = 700
 MAX_IMAGE_SIDE_PX = 1600  # Groq limits the request size; bigger images add nothing for a chart
 
 

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Final plan, 2026-11-12. R0–R5 done 2026-11-13 (dev session); next: R6. |
+| **Status** | Final plan, 2026-11-12. R0–R8 done 2026-11-14 (dev session); next: R9 (eval). |
 | **Written in** | a planning-only session. No code was changed. |
 | **Implement in** | a development session, stage by stage (Section 10). |
 | **Project plan** | `project_plan.txt` **Phase 3 (Doc QA Agent)**. Settles its open item "PDF parsing library" (Docling). |
@@ -596,7 +596,7 @@ values; the unlabelled chart's values are marked "≈".
 text chunks ≤ 350 tokens, the SLA table as its own chunk(s) with the header in every piece, picture chunks with
 descriptions, and nested heading paths on every chunk.
 
-### [x] R5 — Embeddings, ingestion, worker, upload API  (done 2026-11-13, not committed)
+### [x] R5 — Embeddings, ingestion, worker, upload API  (done 2026-11-13, commit 7bfe09d)
 `embeddings.py` (5.7), `ingest.py` (5.3), `worker.py` (5.2), `documents/routes.py` (7), lifespan wiring.
 **Acceptance:**
 - uploading the sample via `/docs` moves it queued → parsing → describing_pictures → chunking → embedding → ready;
@@ -605,19 +605,19 @@ descriptions, and nested heading paths on every chunk.
 - the same file again creates no duplicate;
 - deleting removes the rows and the folder.
 
-### [ ] R6 — Retrieval
+### [x] R6 — Retrieval  (done 2026-11-14, not committed)
 `DocumentStore.dense_search/keyword_search`, `retrieval.py` (`rrf_fuse`) + CLI
 `uv run python -m app.agents.doc.retrieval --session <id> "question"` printing dense, keyword, fused and reranked lists side by side.
 **Acceptance:** "credit if AWS breaches the SLA" → the SLA table is #1 after reranking. A full question with filler words still
 gets keyword hits. Chat B never sees chat A's chunks.
 
-### [ ] R7 — DocAgent + chat integration
+### [x] R7 — DocAgent + chat integration  (done 2026-11-14, not committed)
 `prompts.py`, `models.py` (`DocAnswer`, `DocAgentResult`, state), `graph.py` (6.1–6.4), chat integration (6.5).
 **Acceptance:** in a chat with the sample PDF, a text question, a table question and a chart question all get correct cited
 answers. The follow-up "and for Azure?" works. "What is our parental leave policy?" → not found. A chat without documents
 still answers DB questions.
 
-### [ ] R8 — Frontend
+### [x] R8 — Frontend  (done 2026-11-14, not committed)
 Section 8. **Acceptance:** upload by button and drag-and-drop with live chips; clickable citations; thumbnails; PDF opens at the
 page; "Show retrieval" works; deleting a document removes its chip.
 
@@ -739,3 +739,35 @@ Fakes: a **fake embedder** (deterministic 384-d vectors from a text hash), a **f
   so tests never touch a running dev server's documents; the worker loop survives exceptions. Deleting a whole chat removes
   its rows (cascade) but its folders only at the next startup (orphan cleanup). `Reranker` exists in `embeddings.py` but is
   first loaded in R6.
+- **R6:** `dense_search` wraps the HNSW query in a `MATERIALIZED` CTE and re-sorts (pgvector's advice for
+  `relaxed_order`). A `Retriever` class holds dense/keyword/fuse/rerank as separate methods (graph nodes, CLI and the R9
+  eval share it). **Reranking uses the standalone (rewritten) query**, not the raw follow-up. Acceptance met: "credit if AWS
+  breaches the SLA" → SLA table #1 after rerank (+2.09 vs −5.99); relevant chunks score > 0, unrelated ≈ −11 (useful for
+  R9's threshold). The title prefix in `embed_text` makes keyword search match many chunks for title words ("Q3"); fusion and
+  reranking handle it.
+- **R7:** acceptance met on the live API (text, table, follow-up "and for Azure?" rewritten, chart exact "14", chart
+  estimated "approximately $425,000", OCR, not-found, DB routing for chats without documents; ~2 s per answer).
+  `LLM_ERRORS` moved to `app/llm.py` (shared by both agents); `DBAgent` got `name = "db"` and an unused `session_id`
+  parameter so both agents share one `ask` signature. `DocAgent.ask` first checks document statuses ("still being
+  processed (stage: …)" / none ready / none uploaded). Citation numbers are taken from BOTH the structured list and the
+  `[n]` marks in the text, invalid ones removed from the text. Snippets drop markdown table separator rows. Until R9 sets
+  `RAG_MIN_RERANK_SCORE`, "not found" comes from the answer LLM (`answer_found=false`), not from the `not_found` node.
+- **R8:** acceptance met in headless Chrome: paperclip upload on a new chat (navigates to it), live chips
+  Queued → Reading the document → Describing pictures 3/3 → Indexing → Ready · 5 pages, citation badges that scroll to and
+  flash their source, picture thumbnails, "Open p. N" → `/file#page=N`, "Show retrieval" table (used rows highlighted),
+  drag-and-drop with an overlay, remove (×) with confirm. Implemented as a `useDocuments` hook (polls only while something
+  is processing), `DocumentChips`, `DocAnswer` (badges via a markdown link rewrite + custom `<a>` renderer). The composer
+  placeholder, thinking label, disclaimer and greeting suggestions switch to document wording when the chat has documents.
+- **Hand-testing documents (2026-11-14, on the user's request):** `evals/make_test_documents.py` builds two 7-page PDFs
+  (a historical guide and a project report) around a real low-resolution scanned page, with 10 tables, 6 charts and a flow
+  diagram; 14 questions with verified answers are in `evals/datasets/test_documents_questions.json`. Testing them found and
+  fixed two pipeline gaps:
+  1. **Text inside pictures was lost.** Docling OCR'd the scanned page but labelled the region a picture and attached the
+     words as its children, which `iterate_items()` skips (`traverse_pictures=False`). `parsing.py` now emits the OCR text
+     of non-chart pictures with >= 30 words as normal text elements (`_text_inside_picture`); chart labels stay excluded.
+  2. **Dense charts were cut off.** A 3-series x 14-point line chart needs ~600 output tokens; at 250 the description
+     stopped halfway. The vision prompt now asks for one compact line per series with a single "≈ = estimated from axis"
+     note, and `VISION_MAX_TOKENS` is 700 (~1.4 descriptions/minute on Groq's free tier instead of ~4). The answer prompt's
+     rule now covers any value marked ≈.
+  Also found: Docling read a two-line title at the very top of a page as a page header (furniture, excluded), and once
+  attached the first line of a paragraph to the previous one (no text lost).

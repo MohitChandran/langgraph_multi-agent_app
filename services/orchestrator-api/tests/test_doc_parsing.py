@@ -73,3 +73,17 @@ def test_chunks_follow_the_plan_shape(parsed: ParsedDocument) -> None:
     register = [c for c in chunks if c.chunk_type == "table" and "Vendor services" in c.content]
     assert len(register) >= 2
     assert all("| Vendor | Category | Service | Contract owner | Next review |" in c.content for c in register)
+
+
+def test_text_inside_a_scanned_picture_becomes_text_but_chart_labels_do_not(tmp_path: Path) -> None:
+    """The scanned preface (a picture of text) yields its OCR'd words as text elements; a chart's axis
+    labels are NOT turned into text (the vision model describes charts)."""
+    document = REPO_ROOT / "evals" / "test_documents" / "wensley-parish-registers-guide.pdf"
+    if not document.exists():
+        pytest.skip("test document missing: run `uv run evals/make_test_documents.py` from the repo root")
+    parsed = parse_document(document, tmp_path, build_converter())
+
+    page2 = " ".join(e.text for e in parsed.elements if e.kind == "text" and e.page_start == 2)
+    assert "Volume No. 108" in page2 and "1538 to 1700" in page2 and "end of 1837" in page2
+    page4_text = [e.text for e in parsed.elements if e.kind == "text" and e.page_start == 4]
+    assert not any(label in " ".join(page4_text) for label in ("1780s", "Entries per decade"))
