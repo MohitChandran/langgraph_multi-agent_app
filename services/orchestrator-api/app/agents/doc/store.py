@@ -26,7 +26,7 @@ from pgvector.psycopg import register_vector_async
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-from app.agents.doc.models import Chunk, Document
+from app.agents.doc.models import Chunk, Document, Hit
 
 # Columns of the API's Document model, shared by every query that returns documents.
 DOCUMENT_COLUMNS = (
@@ -352,6 +352,78 @@ class DocumentStore:
                 " pictures_skipped = %s, embedding_model = %s WHERE id = %s",
                 (len(chunks), page_count, table_count, picture_count, pictures_skipped, embedding_model, document_id),
             )
+
+    # ---------------------------------------------------------------- search (R6)
+
+    async def dense_search(self, session_id: UUID, query_vector: np.ndarray, limit: int) -> list[int]:
+        """Chunk ids of this chat, nearest in MEANING to the query vector first (cosine distance `<=>`).
+
+        Uses the HNSW index. With hnsw.iterative_scan = relaxed_order (set per connection), the index
+        keeps scanning until `limit` rows of THIS chat are found, but may return them slightly out of
+        order; the MATERIALIZED subquery + outer ORDER BY re-sorts them exactly (pgvector's own advice).
+        """
+        rows = await self._fetch_all(
+            """
+            WITH nearest AS MATERIALIZED (
+                SELECT id, embedding <=> %s AS distance
+                FROM app.document_chunks
+                WHERE session_id = %s
+                ORDER BY distance
+                LIMIT %s
+            )
+            SELECT id FROM nearest ORDER BY distance
+            """,
+            (query_vector, session_id, limit),
+        )
+        return [row["id"] for row in rows]
+
+    async def keyword_search(self, session_id: UUID, text: str, limit: int) -> list[int]:
+        """Chunk ids of this chat that contain ANY of the query's words, best keyword match first.
+
+        plainto_tsquery stems the words and drops stop words ("what", "the", ...), but it ANDs
+        them: a full question would then match nothing. Replacing ' & ' with ' | ' ORs them
+        (plan gotcha 9); ts_rank_cd still ranks chunks with more, and closer, matching words higher.
+        Uses the GIN index on tsv.
+        """
+        rows = await self._fetch_all(
+            """
+            WITH q AS (SELECT replace(plainto_tsquery('english', %s)::text, ' & ', ' | ')::tsquery AS query)
+            SELECT c.id
+            FROM app.document_chunks AS c, q
+            WHERE c.session_id = %s AND c.tsv @@ q.query
+            ORDER BY ts_rank_cd(c.tsv, q.query) DESC, c.id
+            LIMIT %s
+            """,
+            (text, session_id, limit),
+        )
+        return [row["id"] for row in rows]
+
+    async def load_hits(self, chunk_ids: Sequence[int]) -> dict[int, Hit]:
+        """The chunks with these ids (plus their document's filename), keyed by id."""
+        rows = await self._fetch_all(
+            """
+            SELECT c.id AS chunk_id, c.document_id, d.filename, c.chunk_type, c.heading_path, c.page_start,
+                   c.page_end, c.content, c.token_count, c.image_path
+            FROM app.document_chunks AS c JOIN app.documents AS d ON d.id = c.document_id
+            WHERE c.id = ANY(%s)
+            """,
+            (list(chunk_ids),),
+        )
+        return {row["chunk_id"]: Hit(**row) for row in rows}
+
+    async def session_document_status(self, session_id: UUID) -> list[tuple[str, str | None]]:
+        """(status, stage) of each document in a chat: tells the agent whether anything is searchable yet."""
+        rows = await self._fetch_all(
+            "SELECT status, stage FROM app.documents WHERE session_id = %s ORDER BY created_at", (session_id,)
+        )
+        return [(row["status"], row["stage"]) for row in rows]
+
+    async def session_has_documents(self, session_id: UUID) -> bool:
+        """True if the chat has at least one document (any status): used to route a message to the Doc agent."""
+        row = await self.fetch_one(
+            "SELECT EXISTS (SELECT 1 FROM app.documents WHERE session_id = %s) AS has", (session_id,)
+        )
+        return bool(row["has"])
 
     # ---------------------------------------------------------------- helpers
 
