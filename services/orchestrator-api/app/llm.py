@@ -15,7 +15,7 @@ from langchain_groq import ChatGroq
 
 from app.config import get_settings
 
-ModelTier = Literal["strong", "fast"]
+ModelTier = Literal["strong", "fast", "vision"]
 
 
 def get_llm(tier: ModelTier = "strong", temperature: float = 0.0, max_tokens: int | None = None) -> ChatGroq:
@@ -23,7 +23,8 @@ def get_llm(tier: ModelTier = "strong", temperature: float = 0.0, max_tokens: in
 
     Args:
         tier: "strong" for reasoning-heavy steps (routing, SQL generation),
-              "fast" for cheap high-volume steps (summaries, query rewrites).
+              "fast" for cheap high-volume steps (summaries, query rewrites),
+              "vision" for describing images (GROQ_VISION_MODEL; must accept image input).
         temperature: 0.0 = deterministic output, which we want for routing and SQL.
         max_tokens: cap on the reply length. Groq's free tier limits OUTPUT tokens per
             minute per model (e.g. 1,000 for some models) and rejects a request outright
@@ -38,7 +39,12 @@ def get_llm(tier: ModelTier = "strong", temperature: float = 0.0, max_tokens: in
     <think>...</think> can never leak into a SQL query or a user-facing answer.
     """
     settings = get_settings()
-    model = settings.groq_strong_model if tier == "strong" else settings.groq_fast_model
+    models = {
+        "strong": settings.groq_strong_model,
+        "fast": settings.groq_fast_model,
+        "vision": settings.groq_vision_model,
+    }
+    model = models[tier]
     return ChatGroq(
         model=model,
         api_key=settings.groq_api_key,
