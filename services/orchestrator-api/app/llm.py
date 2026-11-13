@@ -10,12 +10,19 @@ Run it directly for a "hello world" connectivity check:
 
 from typing import Literal
 
+import groq
 from groq import Groq
+from langchain_core.exceptions import OutputParserException
 from langchain_groq import ChatGroq
+from pydantic import ValidationError
 
 from app.config import get_settings
 
 ModelTier = Literal["strong", "fast", "vision"]
+
+# Errors from an LLM call worth handling (retry or a polite failure): API errors that remain after the
+# Groq client's own retries, and structured-output replies that don't parse into the expected model.
+LLM_ERRORS = (groq.APIError, OutputParserException, ValidationError)
 
 
 def get_llm(tier: ModelTier = "strong", temperature: float = 0.0, max_tokens: int | None = None) -> ChatGroq:

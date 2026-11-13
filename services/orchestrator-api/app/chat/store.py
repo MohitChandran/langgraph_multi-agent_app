@@ -301,12 +301,13 @@ class ChatStore:
     async def recent_complete_messages(self, session_id: UUID, limit: int) -> list[dict[str, Any]]:
         """The newest `limit` COMPLETE messages of a session, newest first: the raw material for memory.
 
-        Returns only what memory needs (role, content, the SQL from the payload), never rows.
+        Returns only what memory needs (role, content, which agent, its SQL or its citations), never rows.
         Failed or pending answers are excluded so they don't pollute the agent's memory.
         """
         return await self._fetch_all(
             """
-            SELECT role, content, payload->'result'->>'sql' AS sql
+            SELECT role, content, payload->>'agent' AS agent, payload->'result'->>'sql' AS sql,
+                   payload->'result'->'citations' AS citations
             FROM app.chat_messages
             WHERE session_id = %s AND status = 'complete'
             ORDER BY id DESC

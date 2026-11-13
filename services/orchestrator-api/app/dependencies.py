@@ -14,6 +14,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 
 from app.agents.db.graph import DBAgent
+from app.agents.doc.graph import DocAgent
 from app.agents.doc.store import DocumentStore
 from app.chat.store import ChatStore
 
@@ -21,6 +22,11 @@ from app.chat.store import ChatStore
 def get_db_agent(request: Request) -> DBAgent:
     """The DB agent compiled once in the lifespan (main.py)."""
     return request.app.state.db_agent
+
+
+def get_doc_agent(request: Request) -> DocAgent:
+    """The Doc QA agent built once in the lifespan (main.py)."""
+    return request.app.state.doc_agent
 
 
 def get_chat_store(request: Request) -> ChatStore:
@@ -37,3 +43,4 @@ def get_document_store(request: Request) -> DocumentStore:
 DBAgentDep = Annotated[DBAgent, Depends(get_db_agent)]
 ChatStoreDep = Annotated[ChatStore, Depends(get_chat_store)]
 DocumentStoreDep = Annotated[DocumentStore, Depends(get_document_store)]
+DocAgentDep = Annotated[DocAgent, Depends(get_doc_agent)]

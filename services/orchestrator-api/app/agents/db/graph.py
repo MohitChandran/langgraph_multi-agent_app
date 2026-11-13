@@ -26,13 +26,11 @@ import json
 import time
 from datetime import date
 from typing import Literal
+from uuid import UUID
 
-import groq
-from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import Runnable
 from langgraph.graph import END, START, StateGraph
-from pydantic import ValidationError
 
 from app.agents.db.database import QueryExecutionError, ReadOnlyDatabase
 from app.agents.db.models import DBAgentResult, DBAgentState, SQLDraft
@@ -41,13 +39,9 @@ from app.agents.db.safety import SQLValidationError, validate_sql
 from app.agents.db.schema import DatabaseSchema, load_schema
 from app.chat.memory import ConversationTurn, format_history
 from app.config import get_settings
-from app.llm import get_llm
+from app.llm import LLM_ERRORS, get_llm
 
 MAX_ATTEMPTS = 3  # first try + 2 repairs; more rarely helps and costs tokens and time
-
-# Errors from the LLM call itself that are worth another attempt: API errors that
-# remain after the Groq client's own retries, and replies that don't parse into SQLDraft.
-LLM_ERRORS = (groq.APIError, OutputParserException, ValidationError)
 MAX_ROWS_CHARS = 12_000  # cap on the rows JSON sent to the answer LLM (~3k tokens)
 ANSWER_MAX_TOKENS = 500  # answers are a few sentences; also keeps us under Groq's output-tokens-per-minute limit
 
@@ -61,6 +55,8 @@ class DBAgent:
 
     The LLMs can be injected so tests can replace them with fakes (no API calls).
     """
+
+    name = "db"  # saved in chat_messages.payload.agent
 
     def __init__(
         self,
@@ -99,13 +95,16 @@ class DBAgent:
         builder.add_edge("answer", END)
         return builder.compile()
 
-    async def ask(self, question: str, history: list[ConversationTurn] | None = None) -> DBAgentResult:
+    async def ask(
+        self, question: str, history: list[ConversationTurn] | None = None, session_id: UUID | None = None
+    ) -> DBAgentResult:
         """Run the whole workflow for one question and package the final state as a DBAgentResult.
 
         Args:
             question: the new question.
             history: earlier exchanges of the same chat (memory), oldest first. None or []
                 means no memory: the CLI, /api/db/ask and the eval call it like that.
+            session_id: accepted so both agents share one signature (chat/service.py); unused here.
                 It's formatted into prompt text ONCE here, not again in every node.
 
         Uses astream (not ainvoke) so we can also record WHICH nodes ran, in order:

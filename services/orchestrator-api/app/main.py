@@ -28,10 +28,12 @@ from app.agents.db.graph import DBAgent
 from app.agents.db.models import DBAgentResult
 from app.agents.db.schema import load_schema
 from app.agents.doc.chunking import TokenCounter
-from app.agents.doc.embeddings import Embedder
+from app.agents.doc.embeddings import Embedder, Reranker
+from app.agents.doc.graph import DocAgent
 from app.agents.doc.ingest import IngestDeps, ingest_document
 from app.agents.doc.models import ParsedDocument
 from app.agents.doc.parsing import build_converter, parse_document
+from app.agents.doc.retrieval import Retriever
 from app.agents.doc.store import DocumentStore
 from app.agents.doc.vision import VISION_MAX_TOKENS, describe_picture
 from app.agents.doc.worker import IngestionWorker
@@ -56,8 +58,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
       2. open the chat pool, create the chat tables if needed, and mark replies left
          'pending' by a crash or restart as errors (app.state.chat_store)
       3. open the document pool and create the document tables (app.state.document_store)
-      4. load the document models ONCE (embedder, tokenizer, Docling converter; plan gotcha 6),
-         recover documents interrupted by a crash, and start the ingestion worker
+      4. load the document models ONCE (embedder, reranker, tokenizer, Docling converter; plan
+         gotcha 6), build the Doc agent, recover interrupted documents, start the ingestion worker
     After the server stops: stop the worker first, then close all pools.
 
     AsyncExitStack closes whatever was opened, in reverse order, even if a later step
@@ -87,6 +89,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         counter = await asyncio.to_thread(TokenCounter, settings.rag_embedding_model)
         app.state.embedder = embedder
         logger.info("Embedding model ready (%s)", embedder.model_name)
+
+        reranker = (
+            await asyncio.to_thread(Reranker, settings.rag_rerank_model, settings.data_dir / "models")
+            if settings.rag_rerank
+            else None
+        )
+        retriever = Retriever(document_store, embedder, reranker, settings.rag_candidates)
+        app.state.doc_agent = DocAgent(
+            document_store, retriever, settings.rag_top_k, settings.rag_context_tokens, settings.rag_min_rerank_score
+        )
+        logger.info("Doc agent ready (rerank: %s)", reranker.model_name if reranker else "off")
 
         worker = IngestionWorker(
             document_store,

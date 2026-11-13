@@ -10,15 +10,17 @@ How the app is wired here:
 """
 
 from collections.abc import AsyncIterator
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
 
 from app.agents.db.models import DBAgentResult
+from app.agents.doc.models import Citation, DocAgentResult
+from app.agents.doc.store import DocumentStore
 from app.chat.service import make_title
 from app.chat.store import ChatStore
-from app.dependencies import get_chat_store, get_db_agent
+from app.dependencies import get_chat_store, get_db_agent, get_doc_agent, get_document_store
 from app.main import app
 
 TEST_PREFIX = "[pytest]"
@@ -27,14 +29,16 @@ TEST_PREFIX = "[pytest]"
 class FakeAgent:
     """Stands in for DBAgent: answers instantly, records every call, can be told to crash."""
 
+    name = "db"
+
     def __init__(self) -> None:
         """Start with no recorded calls and crashing switched off."""
         self.calls: list[dict] = []
         self.crash = False
 
-    async def ask(self, question: str, history: list | None = None) -> DBAgentResult:
+    async def ask(self, question: str, history: list | None = None, session_id: UUID | None = None) -> DBAgentResult:
         """Record the question (and the memory it was given), then answer or raise."""
-        self.calls.append({"question": question, "history": history})
+        self.calls.append({"question": question, "history": history, "session_id": session_id})
         if self.crash:
             raise RuntimeError("Groq is unreachable")
         return DBAgentResult(
@@ -49,6 +53,40 @@ class FakeAgent:
         )
 
 
+class FakeDocAgent:
+    """Stands in for DocAgent: answers with one citation, records calls (incl. which chat it searched)."""
+
+    name = "doc"
+
+    def __init__(self) -> None:
+        """Start with no recorded calls."""
+        self.calls: list[dict] = []
+
+    async def ask(self, question: str, history: list | None = None, session_id: UUID | None = None) -> DocAgentResult:
+        """Record the call and answer from a pretend source on page 2."""
+        self.calls.append({"question": question, "history": history, "session_id": session_id})
+        citation = Citation(
+            n=1,
+            chunk_id=1,
+            document_id=uuid4(),
+            filename="q3-report.pdf",
+            page_start=2,
+            page_end=2,
+            heading_path="4 Cloud Vendors > 4.2 SLA Terms",
+            chunk_type="table",
+            snippet="AWS 99.95%",
+        )
+        return DocAgentResult(
+            question=question,
+            answer=f"From the PDF: {question} [1]",
+            success=True,
+            grounded=True,
+            standalone_query=question,
+            citations=[citation],
+            steps=["rewrite_query", "answer"],
+        )
+
+
 @pytest.fixture
 def fake_agent() -> FakeAgent:
     """A fresh FakeAgent per test."""
@@ -56,10 +94,20 @@ def fake_agent() -> FakeAgent:
 
 
 @pytest.fixture
-async def client(chat_store: ChatStore, fake_agent: FakeAgent) -> AsyncIterator[httpx.AsyncClient]:
-    """HTTP client for the app, with the test store and fake agent injected; cleans up test chats."""
+def fake_doc_agent() -> FakeDocAgent:
+    """A fresh FakeDocAgent per test."""
+    return FakeDocAgent()
+
+
+@pytest.fixture
+async def client(
+    chat_store: ChatStore, document_store: DocumentStore, fake_agent: FakeAgent, fake_doc_agent: FakeDocAgent
+) -> AsyncIterator[httpx.AsyncClient]:
+    """HTTP client for the app, with the test stores and fake agents injected; cleans up test chats."""
     app.dependency_overrides[get_chat_store] = lambda: chat_store
+    app.dependency_overrides[get_document_store] = lambda: document_store
     app.dependency_overrides[get_db_agent] = lambda: fake_agent
+    app.dependency_overrides[get_doc_agent] = lambda: fake_doc_agent
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
             yield http
@@ -266,6 +314,45 @@ async def test_memory_is_isolated_per_chat(client: httpx.AsyncClient, fake_agent
     assert fake_agent.calls[-1]["history"] == []
     await send(client, "contracts follow-up", chat_b)
     assert remembered_questions(fake_agent) == ["contracts question"]
+
+
+# ------------------------------------------------------------------ routing between agents (plan 02, R7)
+
+
+async def add_document(document_store: DocumentStore, session_id: str) -> None:
+    """Attach a (fake) document row to a chat: from then on, its messages go to the Doc agent."""
+    await document_store.create_document(uuid4(), UUID(session_id), "q3-report.pdf", "application/pdf", 1, uuid4().hex)
+
+
+@pytest.mark.integration
+async def test_a_chat_with_documents_is_answered_by_the_doc_agent(
+    client: httpx.AsyncClient, fake_agent: FakeAgent, fake_doc_agent: FakeDocAgent, document_store: DocumentStore
+) -> None:
+    """No documents -> the DB agent ("db"); after a document is added -> the Doc agent ("doc"), for THIS chat."""
+    first = (await send(client, "How many vendors do we have?")).json()
+    session_id = first["session"]["id"]
+    assert first["assistant_message"]["payload"]["agent"] == "db" and len(fake_agent.calls) == 1
+
+    await add_document(document_store, session_id)
+    second = (await send(client, "What credit applies if AWS breaches its SLA?", session_id)).json()
+    assert second["assistant_message"]["payload"]["agent"] == "doc"
+    assert second["assistant_message"]["payload"]["result"]["citations"][0]["filename"] == "q3-report.pdf"
+    assert fake_doc_agent.calls[0]["session_id"] == UUID(session_id)  # it searches THIS chat's documents
+    assert len(fake_agent.calls) == 1  # the DB agent wasn't asked again
+
+
+@pytest.mark.integration
+async def test_memory_of_doc_answers_carries_their_sources(
+    client: httpx.AsyncClient, fake_doc_agent: FakeDocAgent, document_store: DocumentStore
+) -> None:
+    """A doc answer is remembered with the file and page it cited, so follow-ups can refer to it."""
+    session_id = (await send(client, "start")).json()["session"]["id"]
+    await add_document(document_store, session_id)
+    await send(client, "What does the SLA table say?", session_id)
+    await send(client, "and for Azure?", session_id)
+
+    remembered = fake_doc_agent.calls[-1]["history"][-1]
+    assert remembered.sources == "q3-report.pdf p.2" and remembered.sql is None
 
 
 def test_make_title_cuts_long_questions_at_a_word() -> None:

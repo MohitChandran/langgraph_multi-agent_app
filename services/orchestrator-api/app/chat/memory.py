@@ -11,7 +11,8 @@ back into the prompt each time (plan 01, section 5):
   - only 'complete' messages, so failed or pending replies don't pollute memory.
 
 The SQL is included on purpose: for a follow-up like "only the ones in India", the
-easiest correct move is to take the previous query and add a filter.
+easiest correct move is to take the previous query and add a filter. For Doc agent answers
+the cited files and pages are included instead ("Sources1: q3-report.pdf p.2").
 """
 
 from dataclasses import dataclass
@@ -29,6 +30,7 @@ class ConversationTurn:
     question: str
     answer: str
     sql: str | None  # the SQL that produced the answer, so a follow-up can modify it
+    sources: str | None = None  # Doc agent answers: where they came from, e.g. "q3-report.pdf p.2, p.4"
 
 
 async def load_history(store: ChatStore, session_id: UUID, max_turns: int) -> list[ConversationTurn]:
@@ -46,11 +48,28 @@ async def load_history(store: ChatStore, session_id: UUID, max_turns: int) -> li
     rows = await store.recent_complete_messages(session_id, limit=max_turns * 2)
     rows.reverse()  # oldest first
     turns = [
-        ConversationTurn(question=question["content"], answer=answer["content"], sql=answer["sql"])
+        ConversationTurn(
+            question=question["content"],
+            answer=answer["content"],
+            sql=answer["sql"],
+            sources=_sources_text(answer["citations"]) if answer["agent"] == "doc" else None,
+        )
         for question, answer in zip(rows, rows[1:], strict=False)
         if question["role"] == "user" and answer["role"] == "assistant"
     ]
     return turns[-max_turns:]
+
+
+def _sources_text(citations: list[dict] | None) -> str | None:
+    """'q3-report.pdf p.2, p.4' from a doc answer's citations (unique file+page, in citation order)."""
+    if not citations:
+        return None
+    seen: dict[str, list[int]] = {}
+    for citation in citations:
+        pages = seen.setdefault(citation["filename"], [])
+        if citation["page_start"] not in pages:
+            pages.append(citation["page_start"])
+    return "; ".join(f"{name} " + ", ".join(f"p.{page}" for page in pages) for name, pages in seen.items())
 
 
 def format_history(turns: list[ConversationTurn]) -> str:
@@ -72,6 +91,8 @@ def format_history(turns: list[ConversationTurn]) -> str:
         lines.append(f"Q{number}: {turn.question}")
         if turn.sql:
             lines.append(f"SQL{number}: {turn.sql}")
+        if turn.sources:
+            lines.append(f"Sources{number}: {turn.sources}")
         lines.append(f"A{number}: {_shorten(turn.answer)}")
     return "\n".join(lines) + "\n\n"
 

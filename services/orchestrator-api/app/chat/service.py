@@ -20,6 +20,7 @@ from uuid import UUID
 import psycopg
 
 from app.agents.db.models import DBAgentResult
+from app.agents.doc.models import DocAgentResult
 from app.chat.memory import ConversationTurn, load_history
 from app.chat.models import ChatResponse, Message
 from app.chat.store import ChatStore
@@ -39,14 +40,22 @@ class SessionBusyError(RuntimeError):
 
 
 class ChatAgent(Protocol):
-    """What the chat service needs from an agent: just an async `ask`.
+    """What the chat service needs from an agent: a name and an async `ask`.
 
-    A Protocol is "duck typing with a type check": any object with a matching `ask`
-    method fits, without inheriting from anything. DBAgent fits; so does a test fake.
+    A Protocol is "duck typing with a type check": any object with a matching `name` and
+    `ask` fits, without inheriting from anything. DBAgent and DocAgent fit; so do test fakes.
+    `name` is saved with every answer (payload.agent), so the UI and memory know who answered.
     """
 
-    async def ask(self, question: str, history: list[ConversationTurn] | None = None) -> DBAgentResult:
-        """Answer one question, using the earlier exchanges of the chat as context."""
+    name: str
+
+    async def ask(
+        self, question: str, history: list[ConversationTurn] | None = None, session_id: UUID | None = None
+    ) -> DBAgentResult | DocAgentResult:
+        """Answer one question, using the earlier exchanges of the chat as context.
+
+        session_id tells the Doc agent which chat's documents to search; the DB agent ignores it.
+        """
         ...
 
 
@@ -91,7 +100,7 @@ async def send_message(
             raise SessionNotFoundError(f"Chat {session_id} was deleted.") from error
 
         started = time.perf_counter()
-        assistant_message = await _run_agent(store, agent, pending, content, history, started)
+        assistant_message = await _run_agent(store, agent, pending, content, history, session_id, started)
     finally:
         session = await store.release_session(session_id)
 
@@ -106,22 +115,23 @@ async def _run_agent(
     pending: Message,
     question: str,
     history: list[ConversationTurn],
+    session_id: UUID,
     started: float,
 ) -> Message | None:
     """Ask the agent and fill the pending answer with its result, or with an error if it crashed.
 
     The payload keeps everything the UI's "Show SQL & data" panel needs (SQL, rows,
     steps...) under "result"; the answer text itself goes into the message content.
-    "agent" records which agent answered: later chats can mix agents (Phase 2 routing).
+    "agent" records which agent answered ("db" or "doc"): one chat can mix both.
     Returns None if the message vanished (its chat was deleted while the agent ran).
     """
     try:
-        result = await agent.ask(question, history)
+        result = await agent.ask(question, history, session_id)
     except Exception:
         logger.exception("Agent failed for message %s", pending.id)
         return await store.fail_message(pending.id, AGENT_FAILED_TEXT, _elapsed_ms(started))
 
-    payload = {"agent": "db", "result": result.model_dump(mode="json", exclude={"question", "answer"})}
+    payload = {"agent": agent.name, "result": result.model_dump(mode="json", exclude={"question", "answer"})}
     return await store.complete_message(pending.id, result.answer, payload, _elapsed_ms(started))
 
 
