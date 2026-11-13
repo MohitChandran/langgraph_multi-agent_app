@@ -1,5 +1,6 @@
 /**
- * The rounded input box at the bottom (Gemini calls it the "prompt bar").
+ * The rounded input box at the bottom (Gemini calls it the "prompt bar"), with a paperclip
+ * button for attaching documents.
  *
  * Enter sends, Shift+Enter adds a new line, and the text area grows with its
  * content up to a maximum height. While THIS chat is generating a reply, sending is
@@ -8,17 +9,29 @@
  * answer anyway, so you can switch away and come back to it.
  */
 import { useEffect, useRef, useState } from "react";
-import { SendIcon } from "./icons.jsx";
+import { PaperclipIcon, SendIcon } from "./icons.jsx";
 
 const MAX_HEIGHT_PX = 200;
+// A hint for the file picker only: the server decides by the file's real bytes (magic bytes).
+const ACCEPTED_FILES = ".pdf,.docx,.pptx,.md,.markdown,.txt,.png,.jpg,.jpeg";
 
 /**
- * @param {{onSend: (question: string) => void, busy: boolean, disabled?: boolean}} props
+ * @param {{onSend: Function, onAttach: Function, busy: boolean, disabled?: boolean, placeholder?: string}} props
  *   busy = this chat is generating a reply; disabled = the chat can't be used (e.g. not found).
+ *   onAttach = files picked with the paperclip (uploading works even while a reply is generated).
+ *   placeholder = hint shown in the empty box (the page knows whether the chat has documents).
  */
-export default function Composer({ onSend, busy, disabled = false }) {
+export default function Composer({ onSend, onAttach, busy, disabled = false, placeholder = "Ask the operations database" }) {
   const [text, setText] = useState("");
   const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  /** Hand the picked files to the page, then clear the input so the same file can be picked again. */
+  function handleFiles(event) {
+    const files = [...event.target.files];
+    event.target.value = "";
+    if (files.length) onAttach(files);
+  }
   const blocked = busy || disabled;
 
   // Grow/shrink the textarea to fit its text: reset the height, then use the content height.
@@ -55,13 +68,24 @@ export default function Composer({ onSend, busy, disabled = false }) {
 
   return (
     <form className="composer" onSubmit={submit}>
+      <button
+        type="button"
+        className="icon-button ghost attach"
+        onClick={() => fileInputRef.current.click()}
+        disabled={disabled}
+        aria-label="Attach documents"
+        title="Attach documents (PDF, Word, PowerPoint, Markdown, text, images)"
+      >
+        <PaperclipIcon />
+      </button>
+      <input ref={fileInputRef} type="file" multiple accept={ACCEPTED_FILES} hidden onChange={handleFiles} />
       <textarea
         ref={textareaRef}
         rows={1}
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder={busy ? "Waiting for the answer…" : "Ask the operations database"}
+        placeholder={busy ? "Waiting for the answer…" : placeholder}
         aria-label="Your question"
         maxLength={1000}
         disabled={disabled}

@@ -3,11 +3,13 @@
  *   { id, role: "user"|"assistant", content, status: "pending"|"complete"|"error", payload, latency_ms }
  *
  *   UserMessage      - the question, right-aligned in a rounded bubble
- *   AssistantMessage - picks its look from `status`: thinking / error / answer
+ *   AssistantMessage - picks its look from `status` (thinking / error / answer) and, for answers,
+ *                      from `payload.agent`: "doc" answers get citations and sources (DocAnswer.jsx)
  *   ThinkingMessage  - spinning sparkle + shimmering lines while the agent works
  */
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import DocAnswer from "./DocAnswer.jsx";
 import { SparkleIcon } from "./icons.jsx";
 import ResultDetails from "./ResultDetails.jsx";
 
@@ -32,10 +34,10 @@ export function UserMessage({ message }) {
  * payload.result, which ResultDetails already understands. react-markdown never renders
  * raw HTML, so text that came from the database can't inject scripts into the page.
  *
- * @param {{message: object}} props
+ * @param {{message: object, thinkingLabel?: string}} props
  */
-export function AssistantMessage({ message }) {
-  if (message.status === "pending") return <ThinkingMessage />;
+export function AssistantMessage({ message, thinkingLabel }) {
+  if (message.status === "pending") return <ThinkingMessage label={thinkingLabel} />;
 
   const result = message.payload?.result;
   return (
@@ -46,6 +48,8 @@ export function AssistantMessage({ message }) {
       <div className="content">
         {message.status === "error" ? (
           <p className="error-text">{message.content}</p>
+        ) : message.payload?.agent === "doc" && result ? (
+          <DocAnswer message={message} />
         ) : (
           <>
             <div className="markdown">
@@ -60,15 +64,19 @@ export function AssistantMessage({ message }) {
   );
 }
 
-/** Placeholder row shown while a reply is being generated: Gemini-style shimmer lines. */
-export function ThinkingMessage() {
+/**
+ * Placeholder row shown while a reply is being generated: Gemini-style shimmer lines.
+ *
+ * @param {{label?: string}} props - what the agent is doing ("Searching your documents…").
+ */
+export function ThinkingMessage({ label = "Querying the database…" }) {
   return (
     <div className="message assistant" aria-live="polite">
       <div className="avatar">
         <SparkleIcon spinning />
       </div>
       <div className="content">
-        <div className="thinking-label">Querying the database…</div>
+        <div className="thinking-label">{label}</div>
         <div className="shimmer" />
         <div className="shimmer" />
         <div className="shimmer short" />

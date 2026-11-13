@@ -2,6 +2,9 @@
  * One chat: its messages, the composer, sending (plan 01, section 8).
  *
  * Routes: "/" = a new, empty chat; "/c/:sessionId" = an existing chat.
+ * Documents (plan 02, R8): attach with the paperclip or drag-and-drop; chips above the composer
+ * show their processing status (useDocuments polls it); a chat with documents is answered by
+ * the Doc agent on the server.
  * The SERVER is the source of truth: messages are loaded from GET .../messages, and after
  * a send we reload them instead of patching a local copy. The browser only adds two
  * temporary "optimistic" rows (your question + a thinking row) while it waits.
@@ -22,10 +25,12 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { getMessages, sendMessage } from "../api.js";
+import { deleteDocument, getMessages, sendMessage, uploadDocument } from "../api.js";
 import Composer from "../components/Composer.jsx";
+import DocumentChips from "../components/DocumentChips.jsx";
 import Greeting from "../components/Greeting.jsx";
 import { AssistantMessage, UserMessage } from "../components/Messages.jsx";
+import { useDocuments } from "../hooks/useDocuments.js";
 
 const POLL_INTERVAL_MS = 2_000;
 const POLL_GIVE_UP_MS = 120_000;
@@ -50,6 +55,10 @@ export default function ChatPage({ onSessionsChanged }) {
   const [hasMore, setHasMore] = useState(false);
   const [view, setView] = useState("ready"); // "loading" | "ready" | "not-found" | "error"
   const [viewError, setViewError] = useState(null);
+  const { documents, refresh: refreshDocuments } = useDocuments(sessionId);
+  const [uploading, setUploading] = useState(0); // files still being sent
+  const [notice, setNotice] = useState(null); // upload/delete problems, shown above the composer
+  const [dragging, setDragging] = useState(false); // a file is being dragged over the chat
 
   const sessionIdRef = useRef(sessionId); // which chat is on screen right now
   const pageKeyRef = useRef(location.key); // which visit of "/" is on screen right now
@@ -201,10 +210,77 @@ export default function ChatPage({ onSessionsChanged }) {
     }
   }
 
+  /**
+   * Upload files one by one. On "/" (a new chat) the first upload creates the chat; the rest go
+   * into it, and we then open that chat. Errors (too big, unsupported type) are shown per file.
+   */
+  async function uploadFiles(files) {
+    const pageKey = location.key;
+    let targetId = sessionId ?? null;
+    let createdId = null;
+    setNotice(null);
+    setUploading((count) => count + files.length);
+    for (const file of files) {
+      try {
+        const { session } = await uploadDocument(file, targetId);
+        if (!targetId) {
+          targetId = createdId = session.id;
+        }
+      } catch (error) {
+        setNotice(`${file.name}: ${error.message}`);
+      } finally {
+        setUploading((count) => count - 1);
+      }
+    }
+    onSessionsChanged();
+    if (createdId && pageKeyRef.current === pageKey) {
+      navigate(`/c/${createdId}`, { replace: true });
+    } else if (targetId && sessionIdRef.current === targetId) {
+      refreshDocuments(); // shows the new chips and starts polling their status
+    }
+  }
+
+  /** Remove a document from this chat after confirming (its chunks and files are deleted too). */
+  async function removeDocument(doc) {
+    if (!window.confirm(`Remove "${doc.filename}" from this chat?\nIt will no longer be used to answer questions.`)) return;
+    try {
+      await deleteDocument(doc.id);
+    } catch (error) {
+      setNotice(`${doc.filename}: ${error.message}`);
+    }
+    refreshDocuments();
+  }
+
+  /** Drag-and-drop: a file is over the chat. dataTransfer.types tells files apart from dragged text. */
+  function handleDragOver(event) {
+    if (view === "not-found" || !event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault(); // allow dropping
+    setDragging(true);
+  }
+
+  /** The drag left the chat area itself (not just moved onto a child element): hide the overlay. */
+  function handleDragLeave(event) {
+    if (!event.currentTarget.contains(event.relatedTarget)) setDragging(false); // left the chat area itself
+  }
+
+  /** Files were dropped: upload them into this chat (or a new one on "/"). */
+  function handleDrop(event) {
+    event.preventDefault(); // otherwise the browser opens the file in the tab
+    setDragging(false);
+    const files = [...event.dataTransfer.files];
+    if (files.length) uploadFiles(files);
+  }
+
   const busy = last?.status === "pending";
+  const hasDocuments = documents.length > 0;
 
   return (
-    <>
+    <div className="chat-page" onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+      {dragging && (
+        <div className="drop-overlay">
+          <div className="drop-box">Drop files to add them to this chat</div>
+        </div>
+      )}
       <main className="chat">
         <div className="thread">
           {view === "loading" && <p className="thread-note">Loading chat…</p>}
@@ -214,7 +290,7 @@ export default function ChatPage({ onSessionsChanged }) {
             </p>
           )}
           {viewError && <p className="thread-note error-text">{viewError}</p>}
-          {view === "ready" && messages.length === 0 && <Greeting onPick={send} />}
+          {view === "ready" && messages.length === 0 && <Greeting onPick={send} hasDocuments={hasDocuments} />}
           {hasMore && (
             <button type="button" className="load-earlier" onClick={loadEarlier}>
               Load earlier messages
@@ -224,7 +300,11 @@ export default function ChatPage({ onSessionsChanged }) {
             message.role === "user" ? (
               <UserMessage key={message.id} message={message} />
             ) : (
-              <AssistantMessage key={message.id} message={message} />
+              <AssistantMessage
+                key={message.id}
+                message={message}
+                thinkingLabel={hasDocuments ? "Searching your documents…" : "Querying the database…"}
+              />
             ),
           )}
           <div ref={bottomRef} />
@@ -232,9 +312,28 @@ export default function ChatPage({ onSessionsChanged }) {
       </main>
 
       <footer className="composer-area">
-        <Composer onSend={send} busy={busy} disabled={view === "not-found"} />
-        <p className="disclaimer">Answers come from the operations database. Check the SQL for anything important.</p>
+        {notice && (
+          <p className="upload-notice" role="alert">
+            {notice}
+            <button type="button" className="text-button" onClick={() => setNotice(null)}>
+              Dismiss
+            </button>
+          </p>
+        )}
+        <DocumentChips documents={documents} uploading={uploading} onDelete={removeDocument} />
+        <Composer
+          onSend={send}
+          onAttach={uploadFiles}
+          busy={busy}
+          disabled={view === "not-found"}
+          placeholder={hasDocuments ? "Ask about your documents" : "Ask the operations database"}
+        />
+        <p className="disclaimer">
+          {hasDocuments
+            ? "Answers come from your documents. Check the cited sources for anything important."
+            : "Answers come from the operations database. Check the SQL for anything important."}
+        </p>
       </footer>
-    </>
+    </div>
   );
 }

@@ -24,17 +24,19 @@ export class ApiError extends Error {
  * Send one request and return the parsed JSON body (or null for "204 No Content").
  *
  * @param {string} path - e.g. "/api/sessions".
- * @param {{method?: string, body?: object, signal?: AbortSignal}} [options]
+ * @param {{method?: string, body?: object, form?: FormData, signal?: AbortSignal}} [options]
+ *   body = sent as JSON; form = sent as multipart/form-data (file uploads). For a form we must NOT
+ *   set Content-Type ourselves: the browser adds it with the multipart "boundary" it generated.
  * @returns {Promise<any>}
  * @throws {ApiError}
  */
-async function request(path, { method = "GET", body, signal } = {}) {
+async function request(path, { method = "GET", body, form, signal } = {}) {
   let response;
   try {
     response = await fetch(path, {
       method,
       headers: body ? { "Content-Type": "application/json" } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
+      body: form ?? (body ? JSON.stringify(body) : undefined),
       signal,
     });
   } catch (error) {
@@ -114,3 +116,38 @@ export function renameSession(sessionId, title) {
 export function deleteSession(sessionId) {
   return request(`/api/sessions/${sessionId}`, { method: "DELETE" });
 }
+
+/**
+ * Upload a document. sessionId null creates a new chat titled with the file name.
+ * Resolves as soon as the file is stored and QUEUED (HTTP 202); processing continues in the background.
+ *
+ * @param {File} file
+ * @param {string|null} sessionId
+ * @returns {Promise<{session: object, document: object}>}
+ * @throws {ApiError} 413 (too big), 415 (unsupported type), 404 (unknown chat)
+ */
+export function uploadDocument(file, sessionId) {
+  const form = new FormData();
+  form.append("file", file);
+  if (sessionId) form.append("session_id", sessionId);
+  return request("/api/documents", { method: "POST", form });
+}
+
+/**
+ * A chat's documents with their live status (queued / processing + stage / ready / failed).
+ * @param {string} sessionId
+ * @returns {Promise<Array<object>>}
+ */
+export function listDocuments(sessionId) {
+  return request(`/api/sessions/${sessionId}/documents`);
+}
+
+/**
+ * Delete a document (its chunks and files too).
+ * @param {string} documentId
+ * @returns {Promise<null>}
+ */
+export function deleteDocument(documentId) {
+  return request(`/api/documents/${documentId}`, { method: "DELETE" });
+}
+
