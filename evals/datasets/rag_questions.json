@@ -1,1 +1,34 @@
-[]
+{
+  "document": "data/samples/q3-compliance-report.pdf",
+  "generated_by": "uv run scripts/make_sample_docs.py",
+  "description": "Questions for the Doc QA (RAG) eval, plan 02 section 12. expected_pages = where the answer is; expected_facts = what a correct answer must contain. approximate=true: the value is only readable from a chart axis, so the answer must say 'approximately' and be within `tolerance` of the value. not_in_doc: the agent must answer that the documents don't contain it.",
+  "questions": [
+    {"id": "q01", "kind": "text", "question": "What is the minimum monthly uptime cloud providers must commit to?", "expected_pages": [1], "expected_facts": ["99.9%"]},
+    {"id": "q02", "kind": "text", "question": "Which invoices need a Finance Director's approval before payment?", "expected_pages": [1], "expected_facts": ["above USD 25,000"]},
+    {"id": "q03", "kind": "text", "question": "What payment terms do logistics vendors get?", "expected_pages": [1], "expected_facts": ["Net 15"]},
+    {"id": "q04", "kind": "text", "question": "Where must customer data be stored?", "expected_pages": [1], "expected_facts": ["European Union", "India"]},
+    {"id": "q05", "kind": "text", "question": "How much notice must a cloud vendor give before moving data to a new region?", "expected_pages": [1], "expected_facts": ["30 days"]},
+    {"id": "q06", "kind": "text", "question": "What termination clause must every cloud contract include?", "expected_pages": [2], "expected_facts": ["90-day termination for convenience"]},
+
+    {"id": "q07", "kind": "table", "question": "What service credit applies if Amazon Web Services breaches its SLA?", "expected_pages": [2], "expected_facts": ["10% of monthly fee"]},
+    {"id": "q08", "kind": "table", "question": "Which cloud vendor commits to the highest uptime?", "expected_pages": [2], "expected_facts": ["DigitalOcean", "99.99%"]},
+    {"id": "q09", "kind": "table", "question": "What is Oracle Cloud Infrastructure's response time for critical issues?", "expected_pages": [2], "expected_facts": ["2 hours"]},
+    {"id": "q10", "kind": "table", "question": "Who owns the Cisco Systems VPN appliances contract and when is its next review?", "expected_pages": [5], "expected_facts": ["M. Chen", "May 2027"]},
+    {"id": "q11", "kind": "table", "question": "Which services does Dell Technologies provide according to the vendor service register?", "expected_pages": [5], "expected_facts": ["Laptop fleet", "Server maintenance", "Storage arrays"]},
+
+    {"id": "q12", "kind": "picture", "question": "How many security incidents were there in Q3 2026?", "expected_pages": [2], "expected_facts": ["14"]},
+    {"id": "q13", "kind": "picture", "question": "What is the forecast number of security incidents for Q4?", "expected_pages": [2], "expected_facts": ["10"]},
+    {"id": "q14", "kind": "picture", "question": "Approximately how much was spent on Amazon Web Services in Q3 2026?", "expected_pages": [3], "expected_facts": ["420", "USD thousands"], "approximate": true, "tolerance": 0.1},
+    {"id": "q15", "kind": "picture", "question": "Roughly what was the Q3 cloud spend on Google Cloud?", "expected_pages": [3], "expected_facts": ["260", "USD thousands"], "approximate": true, "tolerance": 0.1},
+    {"id": "q16", "kind": "picture", "question": "In the escalation process, what happens after support triage if the incident is critical?", "expected_pages": [3], "expected_facts": ["Notify the CTO within 1 hour"]},
+    {"id": "q17", "kind": "picture", "question": "Within how many days must a post-incident review happen?", "expected_pages": [3], "expected_facts": ["5 days"]},
+
+    {"id": "q18", "kind": "ocr", "question": "What did the internal audit find about Deloitte invoices?", "expected_pages": [4], "expected_facts": ["approved without a purchase order"]},
+    {"id": "q19", "kind": "ocr", "question": "When did the Lenovo hardware contract expire?", "expected_pages": [4], "expected_facts": ["30 September 2026"]},
+    {"id": "q20", "kind": "ocr", "question": "What share of their declared value were DHL Supply Chain shipments insured for?", "expected_pages": [4], "expected_facts": ["50%"]},
+
+    {"id": "q21", "kind": "not_in_doc", "question": "What is our parental leave policy?", "expected_pages": [], "expected_facts": []},
+    {"id": "q22", "kind": "not_in_doc", "question": "What uptime SLA has Accenture committed to?", "expected_pages": [], "expected_facts": []},
+    {"id": "q23", "kind": "not_in_doc", "question": "How many employees does Acme Operations have?", "expected_pages": [], "expected_facts": []}
+  ]
+}
