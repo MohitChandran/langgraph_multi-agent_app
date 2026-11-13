@@ -1,6 +1,9 @@
 # Shared lint/format rules for all Python code in the repo (services, scripts, evals).
 line-length = 120
 target-version = "py312"
+# Ruff 0.17+ also formats Python code blocks inside Markdown. The plans in plannings/ (written by
+# a planning session) align their comments on purpose, so Markdown files are left alone.
+extend-exclude = ["*.md"]
 
 [lint]
 # E/F = pycodestyle + pyflakes basics, I = import sorting, B = common bug patterns, UP = modern syntax

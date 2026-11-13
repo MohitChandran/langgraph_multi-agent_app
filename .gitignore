@@ -1,6 +1,9 @@
 # Secrets
 .env
 
+# Uploaded documents and picture crops (DATA_DIR)
+/data/
+
 # Python
 .venv/
 __pycache__/

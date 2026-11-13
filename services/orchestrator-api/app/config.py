@@ -10,7 +10,7 @@ in the middle of a user request.
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # app/config.py -> app -> orchestrator-api -> services -> repo root
@@ -47,6 +47,35 @@ class Settings(BaseSettings):
     # --- Chat memory ---
     # Previous question/answer exchanges of the same chat that the agent sees (constant prompt cost per turn).
     chat_memory_turns: int = 3
+
+    # --- Document Q&A (RAG), plan 02 section 9 ---
+    data_dir: Path = REPO_ROOT / "data"  # uploaded files + picture crops: data/documents/<document_id>/
+    groq_vision_model: str = "qwen/qwen3.8-27b"  # describes charts/diagrams found in documents
+    # Changing the embedding model means re-embedding every document (vectors from two models don't mix).
+    rag_embedding_model: str = "ibm-granite/granite-embedding-small-english-r2"
+    rag_rerank: bool = True
+    rag_rerank_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
+    rag_chunk_tokens: int = 350  # max tokens of a chunk's content (one idea per chunk)
+    rag_candidates: int = 20  # chunks fetched by EACH search (vector and keyword) before fusion
+    rag_top_k: int = 6  # sources given to the answer LLM
+    rag_context_tokens: int = 3000  # token budget for those sources
+    rag_min_rerank_score: float | None = None  # None = no threshold; set from the R9 eval
+    rag_max_file_mb: int = 25
+    rag_max_pages: int = 150
+    rag_max_pictures_per_doc: int = 20  # vision calls are slow on Groq's free tier (~4 per minute)
+    rag_min_picture_area: float = 0.02  # skip pictures smaller than 2% of their page
+
+    @field_validator("data_dir")
+    @classmethod
+    def _resolve_data_dir(cls, value: Path) -> Path:
+        """A relative DATA_DIR (e.g. "./data") is relative to the repo root, not to wherever the API was started."""
+        return value if value.is_absolute() else (REPO_ROOT / value).resolve()
+
+    @field_validator("rag_min_rerank_score", mode="before")
+    @classmethod
+    def _empty_means_none(cls, value: object) -> object:
+        """`RAG_MIN_RERANK_SCORE=` (empty in .env) means "no threshold" instead of a parse error."""
+        return None if value == "" else value
 
 
 @lru_cache

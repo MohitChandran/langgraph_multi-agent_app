@@ -23,6 +23,7 @@ from app.agents.db.database import ReadOnlyDatabase
 from app.agents.db.graph import DBAgent
 from app.agents.db.models import DBAgentResult
 from app.agents.db.schema import load_schema
+from app.agents.doc.store import DocumentStore
 from app.chat.routes import router as chat_router
 from app.chat.store import ChatStore
 from app.config import get_settings
@@ -41,7 +42,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
       1. open the read-only pool, reflect the schema, compile the DB agent (app.state.db_agent)
       2. open the chat pool, create the chat tables if needed, and mark replies left
          'pending' by a crash or restart as errors (app.state.chat_store)
-    After the server stops: close both pools.
+      3. open the document pool and create the document tables (app.state.document_store)
+    After the server stops: close all pools.
 
     AsyncExitStack closes whatever was opened, in reverse order, even if a later step
     fails (e.g. the chat pool can't connect after the read-only pool already opened).
@@ -58,6 +60,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         interrupted = await chat_store.fail_stale_pending()
         app.state.chat_store = chat_store
         logger.info("Chat store ready (%d interrupted replies marked as error)", interrupted)
+
+        # After the chat store: documents reference chat_sessions (a document belongs to one chat).
+        document_store = await stack.enter_async_context(DocumentStore(settings.app_database_url))
+        await document_store.setup()
+        app.state.document_store = document_store
+        logger.info("Document store ready")
 
         yield
 

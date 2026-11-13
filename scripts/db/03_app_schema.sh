@@ -22,7 +22,10 @@ GRANT CONNECT ON DATABASE :"db_name" TO app_rw;
 
 -- app_rw OWNS schema app: it can create, read and write its own tables there, nothing else.
 CREATE SCHEMA app AUTHORIZATION app_rw;
-ALTER ROLE app_rw SET search_path = app;           -- unqualified table names mean app.<table>
+-- app first: unqualified table names mean app.<table>. public second: that's where the pgvector
+-- extension lives (type `vector`, operator `<=>`), needed by the document tables (plan 02, 4.1).
+-- Safe: app_rw has no grants on public's business tables.
+ALTER ROLE app_rw SET search_path = app, public;
 ALTER ROLE app_rw SET statement_timeout = '10s';   -- chat queries are tiny; anything slower is a bug
 
 -- Deliberately NOT granted: readonly_agent gets nothing on schema app; app_rw gets nothing on public's tables.
