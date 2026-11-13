@@ -83,13 +83,17 @@ def build_converter(num_threads: int | None = None) -> DocumentConverter:
     return DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)})
 
 
-def parse_document(path: Path, pictures_dir: Path, converter: DocumentConverter) -> ParsedDocument:
+def parse_document(
+    path: Path, pictures_dir: Path, converter: DocumentConverter, fallback_title: str | None = None
+) -> ParsedDocument:
     """Convert one file and adapt the result into a ParsedDocument; picture crops are saved in pictures_dir.
 
+    fallback_title is used when the document has no title of its own (default: the file name).
+    Uploads are stored as "original.pdf", so ingestion passes the uploaded filename instead.
     Blocking and CPU-heavy: callers in async code must run it in asyncio.to_thread (gotcha 7).
     """
     document = converter.convert(path).document
-    return to_parsed_document(document, fallback_title=path.stem, pictures_dir=pictures_dir)
+    return to_parsed_document(document, fallback_title=fallback_title or path.stem, pictures_dir=pictures_dir)
 
 
 def to_parsed_document(document: DoclingDocument, fallback_title: str, pictures_dir: Path) -> ParsedDocument:

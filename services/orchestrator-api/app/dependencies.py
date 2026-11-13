@@ -14,6 +14,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 
 from app.agents.db.graph import DBAgent
+from app.agents.doc.store import DocumentStore
 from app.chat.store import ChatStore
 
 
@@ -27,6 +28,12 @@ def get_chat_store(request: Request) -> ChatStore:
     return request.app.state.chat_store
 
 
+def get_document_store(request: Request) -> DocumentStore:
+    """The document store opened once in the lifespan (main.py)."""
+    return request.app.state.document_store
+
+
 # Annotated aliases keep endpoint signatures short: `store: ChatStoreDep`.
 DBAgentDep = Annotated[DBAgent, Depends(get_db_agent)]
 ChatStoreDep = Annotated[ChatStore, Depends(get_chat_store)]
+DocumentStoreDep = Annotated[DocumentStore, Depends(get_document_store)]

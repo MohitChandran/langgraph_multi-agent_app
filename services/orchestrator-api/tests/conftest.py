@@ -73,3 +73,13 @@ async def document_store(chat_store: ChatStore) -> AsyncIterator[DocumentStore]:
         yield store
     finally:
         await store.close()
+
+
+@pytest.fixture
+async def test_session(chat_store: ChatStore) -> AsyncIterator:
+    """A fresh "[pytest]" chat for one test; deleted afterwards, and its documents and chunks with it (CASCADE)."""
+    session = await chat_store.create_session("[pytest] documents")
+    try:
+        yield session.id
+    finally:
+        await chat_store.delete_session(session.id)

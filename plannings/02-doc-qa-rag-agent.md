@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Final plan, 2026-11-12. R0–R4 done 2026-11-13 (dev session); next: R5. |
+| **Status** | Final plan, 2026-11-12. R0–R5 done 2026-11-13 (dev session); next: R6. |
 | **Written in** | a planning-only session. No code was changed. |
 | **Implement in** | a development session, stage by stage (Section 10). |
 | **Project plan** | `project_plan.txt` **Phase 3 (Doc QA Agent)**. Settles its open item "PDF parsing library" (Docling). |
@@ -554,7 +554,7 @@ RAG_MIN_PICTURE_AREA=0.02
 
 Rough effort: R0 ½ day · R1 ½ · R2 1 · R3 ½ · R4 1 · R5 1½ · R6 ½ · R7 1 · R8 1½ · R9 1 day.
 
-### [x] R0 — Dependencies  (done 2026-11-13, not committed)
+### [x] R0 — Dependencies  (done 2026-11-13, commit 350a9fd)
 - `uv add docling fastembed pgvector python-multipart` in `services/orchestrator-api`.
 - **CPU-only PyTorch** (Docling requires `torch>=2.2.2` + `torchvision`; the default Linux wheels bundle CUDA, several GB;
   this machine has no GPU). In `pyproject.toml` (⚠ the only unverified item; check the uv docs, "PyTorch integration"):
@@ -573,30 +573,30 @@ Rough effort: R0 ½ day · R1 ½ · R2 1 · R3 ½ · R4 1 · R5 1½ · R6 ½ · 
 **Acceptance:** `uv run python -c "import docling, fastembed, pgvector; import torch; print(torch.cuda.is_available())"`
 prints `False` and the install is not multi-GB of CUDA libraries.
 
-### [x] R1 — Schema, settings, storage  (done 2026-11-13, not committed)
+### [x] R1 — Schema, settings, storage  (done 2026-11-13, commit a835430)
 `search_path` change (4.1), settings (9), `DocumentStore` with pool `configure` + `setup()` (4.2), `DATA_DIR` + `.gitignore`,
 lifespan opens the store and runs `setup()`.
 **Acceptance:** tables and indexes are in schema `app`; as `readonly_agent`, `SELECT 1 FROM app.document_chunks` →
 *permission denied for schema app*; `validate_sql("SELECT content FROM app.document_chunks")` is rejected.
 
-### [x] R2 — Parsing + sample documents + eval questions  (done 2026-11-13, not committed)
+### [x] R2 — Parsing + sample documents + eval questions  (done 2026-11-13, commit a666aec)
 `parsing.py` (5.4) with its CLI. **Also now** (needed by R4 and R9): `scripts/make_sample_docs.py` (Section 12) and
 `evals/datasets/rag_questions.json`.
 **Acceptance:** on the sample PDF the CLI shows a **nested heading tree** ("4.2 SLA Terms" under "4 Cloud Vendors"), every
 section, the SLA table with correct rows/columns, both charts with labels and area %, the logo and banner, and the OCR page's
 text. Note the seconds per page.
 
-### [x] R3 — Pictures  (done 2026-11-13, not committed)
+### [x] R3 — Pictures  (done 2026-11-13, commit 39a0912)
 `vision.py` (5.5) + CLI `uv run python -m app.agents.doc.vision <image.png> [--caption ...]`.
 **Acceptance:** the logo and banner are skipped (with reasons printed). The printed-value chart's description has the exact
 values; the unlabelled chart's values are marked "≈".
 
-### [x] R4 — Chunking  (done 2026-11-13, not committed)
+### [x] R4 — Chunking  (done 2026-11-13, commit cdb8bb4)
 `chunking.py` (5.6); `--chunks` flag on the parsing CLI. **Acceptance:** chunking unit tests pass (Section 11). On the sample PDF the CLI shows the 5.6 worked example's shape:
 text chunks ≤ 350 tokens, the SLA table as its own chunk(s) with the header in every piece, picture chunks with
 descriptions, and nested heading paths on every chunk.
 
-### [ ] R5 — Embeddings, ingestion, worker, upload API
+### [x] R5 — Embeddings, ingestion, worker, upload API  (done 2026-11-13, not committed)
 `embeddings.py` (5.7), `ingest.py` (5.3), `worker.py` (5.2), `documents/routes.py` (7), lifespan wiring.
 **Acceptance:**
 - uploading the sample via `/docs` moves it queued → parsing → describing_pictures → chunking → embedding → ready;
@@ -729,3 +729,13 @@ Fakes: a **fake embedder** (deterministic 384-d vectors from a text hash), a **f
   that already starts with "Table"/"Figure" isn't prefixed again ("Table: Table 1: …"). The sample gives 20 chunks, all
   ≤ 350 content tokens; the register splits into rows 1–15 / 16–30 / 31–34 with the header in each piece.
   Slow tests (real Docling) are skipped by default: `uv run pytest -m slow`.
+- **R5:** all acceptance criteria met on the live API: the sample PDF goes queued → ready in ~73 s (parse 47 s, 3 pictures,
+  20 chunks, embedding ~3 s); `kill -9` mid-parse → restart logs "1 re-queued" and the job completes; same file again →
+  same document; delete → rows + folder gone; a Markdown upload works too. Additions/choices: FastEmbed's model cache moved
+  to `DATA_DIR/models` (its default is the temp dir, wiped on reboot); a **PDF page-count pre-check with pypdfium2** rejects
+  oversized PDFs before Docling runs; `.txt` is stored as `original.md` (Docling has no plain-text reader); the filename is
+  reduced to its base name (display only); re-uploading a *failed* file re-queues it; an upload bumps the chat's
+  `updated_at` (`ChatStore.touch_session`); `claim_next_document` / `recover_interrupted` take an optional `session_id`
+  so tests never touch a running dev server's documents; the worker loop survives exceptions. Deleting a whole chat removes
+  its rows (cascade) but its folders only at the next startup (orphan cleanup). `Reranker` exists in `embeddings.py` but is
+  first loaded in R6.

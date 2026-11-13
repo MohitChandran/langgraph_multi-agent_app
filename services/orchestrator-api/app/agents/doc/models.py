@@ -7,7 +7,11 @@ selection, chunking, tests, the eval) works with these plain dataclasses, so:
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel
 
 ElementKind = Literal["heading", "text", "table", "picture"]
 
@@ -63,3 +67,32 @@ class Chunk:
     embed_text: str
     token_count: int  # tokens of embed_text, counted with the embedding model's tokenizer
     image_path: str | None = None  # picture chunks only
+
+
+DocumentStatus = Literal["queued", "processing", "ready", "failed"]
+
+
+class Document(BaseModel):
+    """An uploaded document as the API returns it (plan 02, section 7).
+
+    `stage` and `progress` describe live processing ("describing_pictures", "pictures 3/12"):
+    the UI polls this while status is queued/processing.
+    """
+
+    id: UUID
+    session_id: UUID
+    filename: str
+    mime_type: str
+    size_bytes: int
+    title: str | None
+    status: DocumentStatus
+    stage: str | None
+    progress: str | None
+    error: str | None
+    page_count: int | None
+    chunk_count: int | None
+    table_count: int | None
+    picture_count: int | None
+    pictures_skipped: int | None
+    created_at: datetime
+    finished_at: datetime | None

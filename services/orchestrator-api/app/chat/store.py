@@ -189,6 +189,13 @@ class ChatStore:
         row = await self.fetch_one("DELETE FROM app.chat_sessions WHERE id = %s RETURNING id", (session_id,))
         return row is not None
 
+    async def touch_session(self, session_id: UUID) -> Session | None:
+        """Bump updated_at (e.g. a document was uploaded), so the chat moves to the top of the sidebar."""
+        row = await self.fetch_one(
+            f"UPDATE app.chat_sessions SET updated_at = now() WHERE id = %s RETURNING {SESSION_COLUMNS}", (session_id,)
+        )
+        return Session(**row) if row else None
+
     async def claim_session(self, session_id: UUID) -> Session | None:
         """Mark the conversation busy, so only one reply is generated at a time. None = couldn't claim.
 
