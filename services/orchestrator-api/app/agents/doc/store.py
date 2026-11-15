@@ -418,13 +418,6 @@ class DocumentStore:
         )
         return [(row["status"], row["stage"]) for row in rows]
 
-    async def session_has_documents(self, session_id: UUID) -> bool:
-        """True if the chat has at least one document (any status): used to route a message to the Doc agent."""
-        row = await self.fetch_one(
-            "SELECT EXISTS (SELECT 1 FROM app.documents WHERE session_id = %s) AS has", (session_id,)
-        )
-        return bool(row["has"])
-
     # ---------------------------------------------------------------- helpers
 
     async def _fetch_all(self, query: str, params: Any = ()) -> list[dict[str, Any]]:

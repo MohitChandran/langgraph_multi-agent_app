@@ -33,6 +33,7 @@ REWRITE_MAX_TOKENS = 100
 SNIPPET_CHARS = 200
 CITATION_MARK = re.compile(r"\[(\d+)\]")
 TABLE_SEPARATOR = re.compile(r"\|(?:-+\|)+")  # the "|---|---|" row of a markdown table
+CHUNK_KINDS = {"text": "passage", "table": "table", "picture": "figure"}  # chunk_type -> words a reader expects
 
 
 class DocAgent:
@@ -123,7 +124,14 @@ class DocAgent:
             text = "None of the documents in this chat could be processed, so there is nothing to search yet."
         else:
             text = "There are no documents in this chat yet. Upload one to ask questions about it."
-        return DocAgentResult(question=question, answer=text, success=False, grounded=False, standalone_query=question)
+        return DocAgentResult(
+            question=question,
+            answer=text,
+            success=False,
+            grounded=False,
+            standalone_query=question,
+            reasoning=["Checked the chat's documents first: none is ready to search yet, so nothing was searched."],
+        )
 
     # ---------------------------------------------------------------- nodes
 
@@ -212,15 +220,60 @@ class DocAgent:
                 question=question, answer="Sorry, I couldn't write an answer right now. Please try again.",
                 success=False, grounded=False, standalone_query=state.get("standalone_query", question),
                 retrieval=trace, steps=steps, error=state.get("error"),
+                reasoning=[*explain_search(question, state), "The answer model failed, so no answer was written."],
             )  # fmt: skip
 
         text, numbers = clean_citations(reply.answer, reply.citations, len(sources))
         citations = [to_citation(n, sources[n - 1]) for n in numbers]
         grounded = reply.answer_found and bool(citations)
+        reasoning = [*explain_search(question, state), explain_outcome(steps, grounded, len(citations), len(sources))]
         return DocAgentResult(
             question=question, answer=text, success=grounded, grounded=grounded,
             standalone_query=state.get("standalone_query", question), citations=citations, retrieval=trace, steps=steps,
+            reasoning=reasoning,
         )  # fmt: skip
+
+
+def explain_search(question: str, state: DocAgentState) -> list[str]:
+    """Plain sentences on how the search went (UI flow panel), from facts in the final state, no LLM call."""
+    lines = []
+    standalone = state.get("standalone_query", question)
+    if not same_words(standalone, question):
+        lines.append(f'Rewrote the follow-up into a standalone search query: "{standalone}".')
+    candidates: list[Hit] = state.get("candidates") or []
+    both = sum(hit.dense_rank is not None and hit.keyword_rank is not None for hit in candidates)
+    lines.append(
+        f"Searched this chat's documents by meaning and by keywords: {len(candidates)} candidate chunks"
+        + (f", {both} of them found by both searches." if candidates else ".")
+    )
+    sources: list[Hit] = state.get("sources") or []
+    if sources:
+        best = sources[0]
+        score = f", rerank score {best.rerank_score:+.2f}" if best.rerank_score is not None else ""
+        lines.append(
+            f"Kept the {len(sources)} most relevant as sources; the best match is a "
+            f"{CHUNK_KINDS.get(best.chunk_type, best.chunk_type)} on page "
+            f"{best.page_start} of {best.filename}{score}."
+        )
+    return lines
+
+
+def same_words(a: str, b: str) -> bool:
+    """True if two texts have the same words, ignoring case and punctuation.
+
+    The rewriter often hands a question back unchanged except for a dropped "?"; that is not a
+    rewrite worth telling the reader about.
+    """
+    return re.findall(r"\w+", a.casefold()) == re.findall(r"\w+", b.casefold())
+
+
+def explain_outcome(steps: list[str], grounded: bool, cited: int, sources: int) -> str:
+    """One sentence on how the answer was produced (or why there is none)."""
+    if "not_found" in steps:
+        return "Nothing relevant was found, so it says so without asking the answer model."
+    if grounded:
+        return f"The answer model wrote the answer from the sources and cites {cited} of the {sources}."
+    return "The sources didn't contain the answer, so it says so instead of guessing."
 
 
 def format_sources(sources: list[Hit]) -> str:

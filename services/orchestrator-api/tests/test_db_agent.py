@@ -17,6 +17,7 @@ from app.agents.db.graph import MAX_ATTEMPTS, DBAgent
 from app.agents.db.models import SQLDraft
 from app.agents.db.safety import ValidatedQuery
 from app.agents.db.schema import Column, DatabaseSchema, Table
+from app.chat.memory import ConversationTurn
 
 SCHEMA = DatabaseSchema(tables=[Table("vendors", None, [Column("name", "text", False)])])
 GOOD_SQL = "SELECT name FROM vendors"
@@ -146,3 +147,31 @@ async def test_broken_llm_reply_is_retried_with_a_fresh_prompt() -> None:
 
     assert result.success and result.attempts == 2
     assert writer.prompts[1][-1].content == "Question: Which vendors do we have?"  # not the repair prompt
+
+
+async def test_reasoning_explains_plan_repairs_and_outcome() -> None:
+    """The DB agent's reasoning names its plan, the extra attempt after a failure, and the rows returned."""
+    agent, _ = make_agent(FakeSQLWriter(draft("SELECT nme FROM vendors"), draft()), FakeDatabase(failures=1))
+    result = await agent.ask("Which vendors do we have?")
+    assert result.reasoning == [
+        "Planned the query: test",
+        "Needed 2 attempts: a query failed the safety checks or the database, and the error was sent back to the "
+        "model to fix it.",
+        "Ran the safety-checked query on the read-only database: 1 row returned.",
+    ]
+
+
+async def test_reasoning_for_an_out_of_scope_question() -> None:
+    """can_answer=false is explained as a decision, and nothing else is claimed."""
+    agent, _ = make_agent(FakeSQLWriter(draft("", can_answer=False)), FakeDatabase())
+    result = await agent.ask("What's the weather?")
+    assert result.reasoning == ["Decided the business tables can't answer this, so no SQL was run: test"]
+
+
+async def test_reasoning_mentions_chat_history_with_a_proper_plural() -> None:
+    """One earlier exchange reads "the last exchange", two read "the last 2 exchanges"."""
+    turn = ConversationTurn("Which vendors do we have?", "Dell Technologies.", None)
+    for history, words in (([turn], "the last exchange"), ([turn, turn], "the last 2 exchanges")):
+        agent, _ = make_agent(FakeSQLWriter(draft()), FakeDatabase())
+        result = await agent.ask("And their emails?", history=history)
+        assert result.reasoning[0] == f"Used {words} of this chat to understand the question."

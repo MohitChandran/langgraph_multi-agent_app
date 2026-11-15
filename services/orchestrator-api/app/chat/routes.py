@@ -36,15 +36,29 @@ async def chat(
     The agent sees the last CHAT_MEMORY_TURNS exchanges of this chat as memory.
     404: the session doesn't exist. 409: this chat is still answering a previous message.
     """
-    has_documents = body.session_id is not None and await documents.session_has_documents(body.session_id)
-    agent = doc_agent if has_documents else db_agent
+    chat_documents = await documents.list_documents(body.session_id) if body.session_id else []
+    agent = doc_agent if chat_documents else db_agent
+    route = {"router": "rule", "agent": agent.name, "reason": route_reason([d.filename for d in chat_documents])}
     memory_turns = get_settings().chat_memory_turns
     try:
-        return await send_message(store, agent, body.session_id, body.content.strip(), memory_turns)
+        return await send_message(store, agent, body.session_id, body.content.strip(), memory_turns, route)
     except SessionNotFoundError as error:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from error
     except SessionBusyError as error:
         raise HTTPException(status.HTTP_409_CONFLICT, str(error)) from error
+
+
+def route_reason(filenames: list[str]) -> str:
+    """Why the message went to this agent, in one sentence (saved with the answer, shown in the UI's flow panel).
+
+    Today the router is a fixed rule; the Phase 2 orchestrator will replace it with an LLM decision
+    and its own reasoning ("router": "llm").
+    """
+    if not filenames:
+        return "This chat has no uploaded documents, so the question goes to the Database agent (business data)."
+    shown = ", ".join(filenames[:2]) + (f" and {len(filenames) - 2} more" if len(filenames) > 2 else "")
+    count = f"{len(filenames)} uploaded document" + ("" if len(filenames) == 1 else "s")
+    return f"This chat has {count} ({shown}), so questions here go to the Document agent."
 
 
 @router.get("/sessions")

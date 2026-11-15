@@ -332,10 +332,14 @@ async def test_a_chat_with_documents_is_answered_by_the_doc_agent(
     first = (await send(client, "How many vendors do we have?")).json()
     session_id = first["session"]["id"]
     assert first["assistant_message"]["payload"]["agent"] == "db" and len(fake_agent.calls) == 1
+    route = first["assistant_message"]["payload"]["route"]
+    assert route["router"] == "rule" and route["agent"] == "db" and "no uploaded documents" in route["reason"]
 
     await add_document(document_store, session_id)
     second = (await send(client, "What credit applies if AWS breaches its SLA?", session_id)).json()
     assert second["assistant_message"]["payload"]["agent"] == "doc"
+    reason = second["assistant_message"]["payload"]["route"]["reason"]
+    assert "1 uploaded document (q3-report.pdf)" in reason and "Document agent" in reason  # saved with the answer
     assert second["assistant_message"]["payload"]["result"]["citations"][0]["filename"] == "q3-report.pdf"
     assert fake_doc_agent.calls[0]["session_id"] == UUID(session_id)  # it searches THIS chat's documents
     assert len(fake_agent.calls) == 1  # the DB agent wasn't asked again

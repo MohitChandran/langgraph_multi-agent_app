@@ -771,3 +771,14 @@ Fakes: a **fake embedder** (deterministic 384-d vectors from a text hash), a **f
      rule now covers any value marked ≈.
   Also found: Docling read a two-line title at the very top of a page as a page header (furniture, excluded), and once
   attached the first line of a paragraph to the previous one (no text lost).
+- **"How this was answered" panel (2026-11-14, user request, beyond the plan).** The retrieval panel (and the DB agent's
+  "SQL & data" panel) now opens with the question's route and each hop's reasoning:
+  `Your question -> Router -> Document agent -> Answer`, then one line from the router and a few from the agent.
+  Nothing extra is sent to an LLM; every sentence is built from facts already in the final state:
+  - `chat/routes.py` `route_reason()` -> `payload.route = {"router": "rule", "agent": ..., "reason": ...}`. Phase 2's
+    orchestrator will fill the same field with `"router": "llm"` and its own reason; the UI then labels it "Orchestrator".
+  - `DocAgentResult.reasoning` from `explain_search()` (rewrite, if the words changed, checked by `same_words()`; dense +
+    keyword counts; best match) and `explain_outcome()`; `DBAgentResult.reasoning` from `explain_run()` (history used,
+    plan, repair attempts, rows, or why no SQL ran).
+  - Stored inside the message payload, so a reload shows what happened at the time. Messages saved earlier show the
+    route pills without the notes.

@@ -104,8 +104,8 @@ class DBAgent:
             question: the new question.
             history: earlier exchanges of the same chat (memory), oldest first. None or []
                 means no memory: the CLI, /api/db/ask and the eval call it like that.
-            session_id: accepted so both agents share one signature (chat/service.py); unused here.
                 It's formatted into prompt text ONCE here, not again in every node.
+            session_id: accepted so both agents share one signature (chat/service.py); unused here.
 
         Uses astream (not ainvoke) so we can also record WHICH nodes ran, in order:
         "updates" events name the node that just finished ({node_name: changes}),
@@ -132,6 +132,7 @@ class DBAgent:
             hit_row_limit=result.hit_row_limit if result else False,
             attempts=state.get("attempts", 0),
             steps=steps,
+            reasoning=explain_run(state, len(history or [])),
             error=state.get("error"),
         )
 
@@ -232,6 +233,36 @@ class DBAgent:
     def _retry_or_give_up(state: DBAgentState) -> Literal["write_sql", "answer"]:
         """Go back to write_sql while attempts remain; after MAX_ATTEMPTS, go to answer (which reports the failure)."""
         return "write_sql" if state["attempts"] < MAX_ATTEMPTS else "answer"
+
+
+def explain_run(state: DBAgentState, history_turns: int) -> list[str]:
+    """Short, plain sentences on what the DB agent did and why, for the UI's flow panel.
+
+    Built only from facts in the final state (no extra LLM call): whether memory was used,
+    the SQL's explanation, how many attempts the repair loop needed, and the outcome.
+    """
+    draft, result, error = state.get("draft"), state.get("result"), state.get("error")
+    attempts = state.get("attempts", 0)
+    lines = []
+    if history_turns:
+        turns = "exchange" if history_turns == 1 else f"{history_turns} exchanges"
+        lines.append(f"Used the last {turns} of this chat to understand the question.")
+    if draft is not None and not draft.can_answer:
+        lines.append(f"Decided the business tables can't answer this, so no SQL was run: {draft.explanation}")
+        return lines
+    if draft is not None:
+        lines.append(f"Planned the query: {draft.explanation}")
+    if attempts > 1:
+        lines.append(
+            f"Needed {attempts} attempts: a query failed the safety checks or the database, and the error "
+            "was sent back to the model to fix it."
+        )
+    if result is not None and not error:
+        rows = f"{result.row_count} row" + ("" if result.row_count == 1 else "s")
+        lines.append(f"Ran the safety-checked query on the read-only database: {rows} returned.")
+    elif error:
+        lines.append(f"Gave up after {attempts} attempts. Last error: {error}")
+    return lines
 
 
 async def _main() -> None:

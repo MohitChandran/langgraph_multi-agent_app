@@ -69,11 +69,17 @@ def make_title(content: str) -> str:
 
 
 async def send_message(
-    store: ChatStore, agent: ChatAgent, session_id: UUID | None, content: str, memory_turns: int = 3
+    store: ChatStore,
+    agent: ChatAgent,
+    session_id: UUID | None,
+    content: str,
+    memory_turns: int = 3,
+    route: dict[str, str] | None = None,
 ) -> ChatResponse:
     """Run one turn and return the session plus the saved question and answer.
 
     `memory_turns` = how many earlier exchanges of this chat the agent sees (CHAT_MEMORY_TURNS).
+    `route` = how and why this agent was chosen ({"router", "agent", "reason"}); saved with the answer.
 
     If the agent itself crashes (e.g. Groq unreachable after its retries), the answer is
     saved with status 'error' and a readable text, and the turn still returns normally:
@@ -100,7 +106,7 @@ async def send_message(
             raise SessionNotFoundError(f"Chat {session_id} was deleted.") from error
 
         started = time.perf_counter()
-        assistant_message = await _run_agent(store, agent, pending, content, history, session_id, started)
+        assistant_message = await _run_agent(store, agent, pending, content, history, session_id, route, started)
     finally:
         session = await store.release_session(session_id)
 
@@ -116,6 +122,7 @@ async def _run_agent(
     question: str,
     history: list[ConversationTurn],
     session_id: UUID,
+    route: dict[str, str] | None,
     started: float,
 ) -> Message | None:
     """Ask the agent and fill the pending answer with its result, or with an error if it crashed.
@@ -132,6 +139,8 @@ async def _run_agent(
         return await store.fail_message(pending.id, AGENT_FAILED_TEXT, _elapsed_ms(started))
 
     payload = {"agent": agent.name, "result": result.model_dump(mode="json", exclude={"question", "answer"})}
+    if route:
+        payload["route"] = route
     return await store.complete_message(pending.id, result.answer, payload, _elapsed_ms(started))
 
 

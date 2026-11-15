@@ -10,6 +10,7 @@
 import { useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import AgentFlow from "./AgentFlow.jsx";
 import { ChevronIcon, ExternalLinkIcon } from "./icons.jsx";
 
 // "[2]" -> "[2](#cite-2)": a markdown link the custom <a> renderer below turns into a badge.
@@ -66,7 +67,9 @@ export default function DocAnswer({ message }) {
       {result.citations.length > 0 && (
         <Sources citations={result.citations} messageId={message.id} highlighted={highlighted} />
       )}
-      {result.retrieval.length > 0 && <RetrievalDetails result={result} />}
+      {(result.retrieval.length > 0 || result.reasoning?.length > 0) && (
+        <RetrievalDetails result={result} payload={message.payload} />
+      )}
     </>
   );
 }
@@ -107,12 +110,13 @@ function Sources({ citations, messageId, highlighted }) {
 }
 
 /**
- * Collapsible "Show retrieval" panel: the workflow steps, the search query, and how every
- * candidate chunk ranked in dense search, keyword search, fusion (RRF) and reranking.
+ * Collapsible "Show retrieval" panel: how the question was routed and why (AgentFlow), the
+ * workflow steps, the search query, and how every candidate chunk ranked in dense search,
+ * keyword search, fusion (RRF) and reranking.
  *
- * @param {{result: object}} props - the DocAgentResult.
+ * @param {{result: object, payload: object}} props - the DocAgentResult and the message payload (route).
  */
-function RetrievalDetails({ result }) {
+function RetrievalDetails({ result, payload }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="details">
@@ -122,6 +126,7 @@ function RetrievalDetails({ result }) {
       </button>
       {open && (
         <div className="details-panel">
+          <AgentFlow payload={payload} result={result} />
           <div className="details-label">Workflow</div>
           <ol className="steps">
             {result.steps.map((step, index) => (
@@ -132,37 +137,41 @@ function RetrievalDetails({ result }) {
           </ol>
           <div className="details-label">Search query</div>
           <p className="details-explanation">{result.standalone_query}</p>
-          <div className="details-label">Candidates ({result.retrieval.length})</div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Chunk</th>
-                  <th>Type</th>
-                  <th>Page</th>
-                  <th>Dense rank</th>
-                  <th>Keyword rank</th>
-                  <th>RRF score</th>
-                  <th>Rerank score</th>
-                  <th>Used</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.retrieval.map((row) => (
-                  <tr key={row.chunk_id} className={row.used ? "used" : undefined}>
-                    <td className="num">#{row.chunk_id}</td>
-                    <td>{row.chunk_type}</td>
-                    <td className="num">{row.page_start}</td>
-                    <td className="num">{row.dense_rank ?? "—"}</td>
-                    <td className="num">{row.keyword_rank ?? "—"}</td>
-                    <td className="num">{row.rrf_score.toFixed(4)}</td>
-                    <td className="num">{row.rerank_score != null ? row.rerank_score.toFixed(2) : "—"}</td>
-                    <td>{row.used ? "✓" : ""}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {result.retrieval.length > 0 && (
+            <>
+              <div className="details-label">Candidates ({result.retrieval.length})</div>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Chunk</th>
+                      <th>Type</th>
+                      <th>Page</th>
+                      <th>Dense rank</th>
+                      <th>Keyword rank</th>
+                      <th>RRF score</th>
+                      <th>Rerank score</th>
+                      <th>Used</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.retrieval.map((row) => (
+                      <tr key={row.chunk_id} className={row.used ? "used" : undefined}>
+                        <td className="num">#{row.chunk_id}</td>
+                        <td>{row.chunk_type}</td>
+                        <td className="num">{row.page_start}</td>
+                        <td className="num">{row.dense_rank ?? "—"}</td>
+                        <td className="num">{row.keyword_rank ?? "—"}</td>
+                        <td className="num">{row.rrf_score.toFixed(4)}</td>
+                        <td className="num">{row.rerank_score != null ? row.rerank_score.toFixed(2) : "—"}</td>
+                        <td>{row.used ? "✓" : ""}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

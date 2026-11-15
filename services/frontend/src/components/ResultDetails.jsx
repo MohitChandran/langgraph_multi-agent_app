@@ -1,17 +1,19 @@
 /**
  * The collapsible "Show SQL & data" panel under an answer.
  *
- * This is what makes the UI useful for TESTING the agent: you see which workflow
- * steps ran (including retries), the exact SQL that was executed, and the raw rows
- * the answer was written from, so every answer can be checked against the data.
+ * This is what makes the UI useful for TESTING the agent: you see how the question was
+ * routed and why (AgentFlow), which workflow steps ran (including retries), the exact SQL
+ * that was executed, and the raw rows the answer was written from. An answer without SQL
+ * (e.g. an out-of-scope question) still gets the panel, titled "Show reasoning".
  */
 import { useState } from "react";
+import AgentFlow from "./AgentFlow.jsx";
 import { ChevronIcon } from "./icons.jsx";
 
 /**
- * @param {{result: object}} props - the DBAgentResult returned by the API.
+ * @param {{result: object, payload: object}} props - the DBAgentResult and the message payload (route).
  */
-export default function ResultDetails({ result }) {
+export default function ResultDetails({ result, payload }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -25,12 +27,13 @@ export default function ResultDetails({ result }) {
   return (
     <div className="details">
       <button type="button" className="details-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
-        {open ? "Hide" : "Show"} SQL & data
+        {open ? "Hide" : "Show"} {result.sql ? "SQL & data" : "reasoning"}
         <ChevronIcon open={open} />
       </button>
 
       {open && (
         <div className="details-panel">
+          <AgentFlow payload={payload} result={result} />
           <div className="details-label">Workflow</div>
           <ol className="steps">
             {result.steps.map((step, index) => (
@@ -42,15 +45,19 @@ export default function ResultDetails({ result }) {
 
           {result.explanation && <p className="details-explanation">{result.explanation}</p>}
 
-          <div className="details-label with-action">
-            SQL
-            <button type="button" className="text-button" onClick={copySql}>
-              {copied ? "Copied" : "Copy"}
-            </button>
-          </div>
-          <pre className="sql">
-            <code>{result.sql}</code>
-          </pre>
+          {result.sql && (
+            <>
+              <div className="details-label with-action">
+                SQL
+                <button type="button" className="text-button" onClick={copySql}>
+                  {copied ? "Copied" : "Copy"}
+                </button>
+              </div>
+              <pre className="sql">
+                <code>{result.sql}</code>
+              </pre>
+            </>
+          )}
 
           {result.error && <p className="details-error">Last error: {result.error}</p>}
 

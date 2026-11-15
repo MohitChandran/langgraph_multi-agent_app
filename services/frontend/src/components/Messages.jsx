@@ -56,7 +56,7 @@ export function AssistantMessage({ message, thinkingLabel }) {
               <Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
             </div>
             {result && <Stats result={result} latencyMs={message.latency_ms} />}
-            {result?.sql && <ResultDetails result={result} />}
+            {result && <ResultDetails result={result} payload={message.payload} />}
           </>
         )}
       </div>

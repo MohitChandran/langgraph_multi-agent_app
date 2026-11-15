@@ -1003,6 +1003,67 @@ button:disabled {
   background: color-mix(in srgb, var(--ok-bg) 70%, transparent);
 }
 
+/* ---------- "How this was answered" flow ---------- */
+
+.flow {
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.flow-steps {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  margin: 0 0 8px;
+}
+
+.flow-step {
+  display: inline-block;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.flow-step.active {
+  background: var(--active);
+  color: var(--active-text);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+/* the arrow sits between the pills, outside their borders */
+.flow-steps li:not(:last-child)::after {
+  content: "→";
+  margin-left: 6px;
+  color: var(--text-muted);
+}
+
+.flow-note {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 4px 0 0;
+}
+
+.flow-note ul {
+  margin: 2px 0 0;
+  padding-left: 20px;
+}
+
+.flow-note li {
+  margin: 2px 0;
+}
+
+.flow-who {
+  font-weight: 600;
+  color: var(--text);
+}
+
 /* ---------- phones ---------- */
 
 @media (max-width: 560px) {

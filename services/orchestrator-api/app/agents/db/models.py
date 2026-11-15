@@ -66,4 +66,7 @@ class DBAgentResult(BaseModel):
     hit_row_limit: bool = False
     attempts: int = 0
     steps: list[str] = Field(default_factory=list, description="Workflow nodes in the order they ran.")
+    reasoning: list[str] = Field(
+        default_factory=list, description="Short sentences on what the agent did and why (the UI's flow panel)."
+    )
     error: str | None = None

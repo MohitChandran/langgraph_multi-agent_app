@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 
-from app.agents.doc.graph import DocAgent, clean_citations
+from app.agents.doc.graph import DocAgent, clean_citations, explain_search
 from app.agents.doc.models import DocAnswer, Hit
 from app.agents.doc.prompts import NOT_FOUND_TEXT
 from app.chat.memory import ConversationTurn
@@ -43,7 +43,9 @@ class FakeRetriever:
         return [hit.chunk_id for hit in self.hits]
 
     async def fuse(self, dense_ids: list[int], keyword_ids: list[int]) -> list[Hit]:
-        """Return the hits as if fused."""
+        """Return the hits as if fused: each found by both searches, at the same rank in both (like the real fuse)."""
+        for rank, hit in enumerate(self.hits, start=1):
+            hit.dense_rank = hit.keyword_rank = rank
         return list(self.hits)
 
     async def rerank(self, query: str, hits: list[Hit]) -> list[Hit]:
@@ -154,3 +156,33 @@ def test_clean_citations_merges_list_and_text_and_drops_invalid_numbers() -> Non
     text, numbers = clean_citations("A [2]. B [9]. C [1] [2].", [3, 1], source_count=3)
     assert numbers == [2, 1, 3]
     assert text == "A [2]. B . C [1] [2]."
+
+
+async def test_reasoning_explains_search_and_outcome() -> None:
+    """The result carries short reasoning sentences for the UI: search numbers, best match, outcome."""
+    agent, _, _, _ = make_agent([make_hit(1, "AWS | 99.95%", chunk_type="table"), make_hit(2, "other")])
+    result = await agent.ask("What credit applies if AWS breaches its SLA?", session_id=SESSION)
+    text = " ".join(result.reasoning)
+    assert "2 candidate chunks, 2 of them found by both searches" in text
+    assert "best match is a table on page 2 of q3-report.pdf, rerank score +2.00" in text
+    assert "cites 1 of the 2" in text and "Rewrote" not in text
+
+
+async def test_reasoning_mentions_the_rewrite_and_a_not_found() -> None:
+    """A rewritten follow-up is explained; with nothing found the outcome says no model was asked."""
+    history = [ConversationTurn("What credit applies if AWS breaches its SLA?", "10%.", None)]
+    agent, _, _, _ = make_agent([make_hit(1, "x")])
+    rewritten = await agent.ask("and for Azure?", history=history, session_id=SESSION)
+    assert rewritten.reasoning[0].startswith('Rewrote the follow-up into a standalone search query: "service credit')
+
+    empty_agent, _, _, _ = make_agent([])
+    nothing = await empty_agent.ask("parental leave?", session_id=SESSION)
+    assert nothing.reasoning[-1] == "Nothing relevant was found, so it says so without asking the answer model."
+
+
+def test_a_rewrite_that_only_changes_punctuation_is_not_reported() -> None:
+    """The rewriter dropping a "?" or changing case is not a rewrite; changed words are."""
+    question = "What is register book No. 2 made of?"
+    unchanged = explain_search(question, {"standalone_query": "what is register book no 2 made of"})
+    rewritten = explain_search(question, {"standalone_query": "Material of register book No. 2"})
+    assert unchanged[0].startswith("Searched") and rewritten[0].startswith("Rewrote")

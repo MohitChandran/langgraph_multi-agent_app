@@ -175,6 +175,7 @@ class DocAgentResult(BaseModel):
     citations: list[Citation] = Field(default_factory=list)
     retrieval: list[RetrievalTrace] = Field(default_factory=list)
     steps: list[str] = Field(default_factory=list)
+    reasoning: list[str] = Field(default_factory=list, description="Short sentences on what the agent did and why.")
     error: str | None = None
 
 
