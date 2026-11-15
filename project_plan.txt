@@ -1,6 +1,9 @@
 ENTERPRISE MULTI-AGENT OPS PLATFORM — PROJECT PLAN
-Last updated: 2026-10-26
-Status: Phase 1 (Database Agent) in progress — steps 1-4 done; agent answers real questions. Next: step 5 eval.
+Last updated: 2026-11-16
+Status: Phase 1 (DB agent) and Phase 3 (Doc QA RAG agent) built and working; their evals are still to do.
+        Chat sessions + memory (plannings/01) and most of the chat UI are built early. A fixed rule picks the
+        agent today (chat with documents -> Doc agent, else DB agent). Next: Phase 2 orchestrator
+        (plannings/03-orchestrator.md, being written in the planning session), then the evals.
 
 ══════════════════════════════════════════════════════════════════════════════════════════════
 0. DECISION LOG
@@ -279,6 +282,8 @@ Rule: Claude writes the code and explains every file/function; interview prep ha
            [x] extra: minimal Gemini-style chat UI (services/frontend) + FastAPI POST /api/db/ask
                (built early on request for manual testing; Phase 2 adds the orchestrator + streaming,
                Phase 7 adds upload + approval UI)
+           [x] extra: chat sessions + memory (plannings/01, S1-S4, 2026-11-12): sessions stored in Postgres
+               schema `app`, last 3 exchanges as memory, sidebar with per-chat URLs
     Learn: structured output prompting, SQL safety, measuring an LLM component.
 
 [ ] Phase 2 — Orchestrator v1
@@ -290,6 +295,12 @@ Rule: Claude writes the code and explains every file/function; interview prep ha
     Build: PDF upload -> layout-aware parsing -> structural chunking -> local embeddings
            in pgvector -> BM25 -> RRF fusion -> cited answers. Plus the RAG eval
            (dense vs sparse vs hybrid comparison).
+    Plan: plannings/02-doc-qa-rag-agent.md (stages R0-R9).
+    Steps: [x] R0-R8 (2026-11-13/14): Docling + Groq vision, structure-aware chunking, granite embeddings,
+               pgvector + Postgres FTS, RRF + cross-encoder rerank, cited answers, upload UI with citations
+           [x] extra: 2 x 7-page test PDFs + 14 hand-verified questions (evals/test_documents)
+           [x] extra: "How this was answered" panel (route + each agent's reasoning) in the UI
+           [ ] R9 eval: retrieval hit rate@k, faithfulness, dense vs keyword vs hybrid
     Learn: chunking strategies, embeddings vs keyword search, fusion, grounding/citations.
 
 [ ] Phase 4 — Web Search via MCP
@@ -308,6 +319,8 @@ Rule: Claude writes the code and explains every file/function; interview prep ha
 
 [ ] Phase 7 — React Frontend
     Build: chat with streaming, file upload, approval modal.
+    Already built early: chat UI, sidebar/sessions, file upload with status chips, cited answers.
+    Left: streaming, approval modal.
     Learn: consuming streamed responses in the browser, simple React state.
 
 [ ] Phase 8 — Hardening & Showcase
