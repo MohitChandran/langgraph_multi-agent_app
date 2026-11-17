@@ -50,3 +50,21 @@ async def test_history_reaches_both_the_sql_prompt_and_the_answer_prompt() -> No
     assert f"SQL1: {TURN.sql}" in sql_prompt
     assert sql_prompt.endswith("Question: only the ones in India")
     assert "Q1: Which vendors have overdue invoices?" in answer_prompts[0][-1].content
+
+
+def test_orchestrator_answers_remember_the_last_sql_and_every_source() -> None:
+    """A turn that used db, doc and web: the last SUCCESSFUL db call's SQL, then doc pages and web URLs."""
+    from app.chat.memory import _orchestrator_memory
+
+    calls = [
+        {"agent": "db", "status": "ok", "sql": "SELECT 1", "citations": None, "sources": None},
+        {"agent": "doc", "status": "ok", "sql": None, "sources": None,
+         "citations": [{"filename": "q3-report.pdf", "page_start": 4}, {"filename": "q3-report.pdf", "page_start": 4}]},
+        {"agent": "web", "status": "ok", "sql": None, "citations": None,
+         "sources": [{"url": "https://example.com/sla"}, {"url": "https://example.com/news"}]},
+        {"agent": "db", "status": "error", "sql": "SELECT broken", "citations": None, "sources": None},
+    ]  # fmt: skip
+    sql, sources = _orchestrator_memory(calls)
+    assert sql == "SELECT 1"
+    assert sources == "q3-report.pdf p.4; https://example.com/sla; https://example.com/news"
+    assert _orchestrator_memory([]) == (None, None)

@@ -1,10 +1,14 @@
-"""API tests for chat sessions (plan 01, stage S2): real routes + real Postgres, FAKE agent.
+"""API tests for chat sessions (plan 01, stage S2; plan 03, stage O4): real routes + real Postgres,
+the REAL orchestrator, FAKE agents and a FAKE supervisor LLM (no Groq).
 
 How the app is wired here:
   - httpx.AsyncClient + ASGITransport sends HTTP requests straight into the FastAPI app
     in memory (no server, no port).
   - ASGITransport does NOT run the lifespan, so app.state is empty. We don't need it:
-    dependency_overrides hands the endpoints our test ChatStore and a FakeAgent instead.
+    dependency_overrides hands the endpoints our test ChatStore and an Orchestrator built from
+    fakes: RuleSupervisor (below) decides like a simple, predictable LLM, and FakeAgent /
+    FakeDocAgent answer instantly. So these tests exercise the whole chain:
+    route -> service -> orchestrator loop -> agent -> saved message -> memory on the next turn.
   - Every test message starts with "[pytest]", so its chat title does too, and the
     fixture deletes exactly those chats afterwards (your real chats are never touched).
 """
@@ -14,14 +18,21 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
 from app.agents.db.models import DBAgentResult
 from app.agents.doc.models import Citation, DocAgentResult
 from app.agents.doc.store import DocumentStore
+from app.agents.email.dummy import DummyEmailAgent
+from app.agents.web.dummy import DummyWebSearchAgent
 from app.chat.service import make_title
 from app.chat.store import ChatStore
-from app.dependencies import get_chat_store, get_db_agent, get_doc_agent, get_document_store
+from app.dependencies import get_chat_store, get_document_store, get_orchestrator
 from app.main import app
+from app.orchestrator.graph import Orchestrator
+from app.orchestrator.models import Limits
+from app.orchestrator.tools import EMAIL_PATTERN, AgentTools
+from tests.orchestrator_fakes import ScriptedLLM, answer, call
 
 TEST_PREFIX = "[pytest]"
 
@@ -87,6 +98,39 @@ class FakeDocAgent:
         )
 
 
+class RuleSupervisor(ScriptedLLM):
+    """A fake supervisor LLM with fixed rules instead of a script, so any conversation works:
+
+      - a question with "hello" -> answered directly, no tools;
+      - otherwise first ask the documents (if the chat has any, i.e. ask_documents is offered)
+        or the database, with the user's question;
+      - if the question contains an email address, then draft an email to it with that result;
+      - then answer "Final answer for: <question>".
+    `crash = True` makes it raise a bug (not an LLM error), which fails the whole turn.
+    """
+
+    def __init__(self) -> None:
+        """No crash; every reply is decided by `decide`."""
+        super().__init__(self.decide)
+        self.crash = False
+
+    def decide(self, messages: list[BaseMessage]) -> AIMessage | Exception:
+        """Pick the next reply from what the conversation looks like so far."""
+        if self.crash:
+            return RuntimeError("bug in the supervisor")
+        system, question = messages[0].content, messages[1].content
+        results = [m for m in messages if isinstance(m, ToolMessage)]
+        drafted = any(c["name"] == "draft_email" for m in messages if isinstance(m, AIMessage) for c in m.tool_calls)
+        if "hello" in question.lower():
+            return answer("Hi there!")
+        if not results:
+            return call("ask_documents" if "- ask_documents:" in system else "ask_database", question=question)
+        address = EMAIL_PATTERN.search(question)
+        if address and not drafted:
+            return call("draft_email", to=[address.group(0)], subject="Summary", content=results[-1].content[:500])
+        return answer(f"Final answer for: {question}")
+
+
 @pytest.fixture
 def fake_agent() -> FakeAgent:
     """A fresh FakeAgent per test."""
@@ -100,14 +144,28 @@ def fake_doc_agent() -> FakeDocAgent:
 
 
 @pytest.fixture
+def supervisor() -> RuleSupervisor:
+    """A fresh rule-based fake supervisor per test."""
+    return RuleSupervisor()
+
+
+@pytest.fixture
+def orchestrator(
+    document_store: DocumentStore, fake_agent: FakeAgent, fake_doc_agent: FakeDocAgent, supervisor: RuleSupervisor
+) -> Orchestrator:
+    """The real Orchestrator over the fake agents, the dummy web/email agents and an in-memory checkpointer."""
+    tools = AgentTools(fake_agent, fake_doc_agent, DummyWebSearchAgent(), DummyEmailAgent(), document_store, Limits())
+    return Orchestrator(tools, chat_model=supervisor)
+
+
+@pytest.fixture
 async def client(
-    chat_store: ChatStore, document_store: DocumentStore, fake_agent: FakeAgent, fake_doc_agent: FakeDocAgent
+    chat_store: ChatStore, document_store: DocumentStore, orchestrator: Orchestrator
 ) -> AsyncIterator[httpx.AsyncClient]:
-    """HTTP client for the app, with the test stores and fake agents injected; cleans up test chats."""
+    """HTTP client for the app, with the test stores and the test orchestrator injected; cleans up test chats."""
     app.dependency_overrides[get_chat_store] = lambda: chat_store
     app.dependency_overrides[get_document_store] = lambda: document_store
-    app.dependency_overrides[get_db_agent] = lambda: fake_agent
-    app.dependency_overrides[get_doc_agent] = lambda: fake_doc_agent
+    app.dependency_overrides[get_orchestrator] = lambda: orchestrator
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
             yield http
@@ -124,6 +182,11 @@ async def send(client: httpx.AsyncClient, content: str, session_id: str | None =
     return await client.post("/api/chat", json={"session_id": session_id, "content": f"{TEST_PREFIX} {content}"})
 
 
+async def decide(client: httpx.AsyncClient, message_id: int, body: dict) -> httpx.Response:
+    """POST an email decision for an answer."""
+    return await client.post(f"/api/messages/{message_id}/email-approval", json=body)
+
+
 # ------------------------------------------------------------------ create & continue
 
 
@@ -138,9 +201,12 @@ async def test_first_message_creates_a_chat_and_the_second_continues_it(client: 
     assert body["session"]["message_count"] == 2 and body["session"]["is_running"] is False
     assert body["user_message"]["role"] == "user"
     assistant = body["assistant_message"]
-    assert assistant["status"] == "complete" and assistant["content"].startswith("Answer to:")
-    assert assistant["payload"]["agent"] == "db" and assistant["payload"]["result"]["sql"].startswith("SELECT")
-    assert "answer" not in assistant["payload"]["result"]  # the answer is the content, not duplicated
+    assert assistant["status"] == "complete" and assistant["content"].startswith("Answer to:")  # passthrough (D9)
+    payload = assistant["payload"]
+    assert payload["agent"] == "orchestrator" and payload["route"]["router"] == "llm"
+    [db_call] = payload["result"]["calls"]
+    assert db_call["agent"] == "db" and db_call["result"]["sql"].startswith("SELECT")
+    assert "answer" not in payload["result"]  # the answer is the content, not duplicated
     assert assistant["latency_ms"] is not None
 
     second = await send(client, "only the ones in India", session_id)
@@ -190,21 +256,33 @@ async def test_busy_chat_returns_409_but_a_stale_claim_is_taken_over(
 
 
 @pytest.mark.integration
-async def test_agent_crash_is_saved_as_error_and_the_chat_keeps_working(
-    client: httpx.AsyncClient, fake_agent: FakeAgent
+async def test_orchestrator_crash_is_saved_as_error_and_the_chat_keeps_working(
+    client: httpx.AsyncClient, supervisor: RuleSupervisor
 ) -> None:
-    """A crashing agent -> the answer is saved with status 'error', the claim is released, the next send works."""
-    fake_agent.crash = True
+    """A bug in the loop -> the answer is saved with status 'error', the claim is released, the next send works."""
+    supervisor.crash = True
     crashed = await send(client, "this will crash")
     assert crashed.status_code == 200
     body = crashed.json()
     assert body["assistant_message"]["status"] == "error"
-    assert "something went wrong" in body["assistant_message"]["content"]
+    assert body["assistant_message"]["content"] == "Sorry, something went wrong while answering. Please try again."
     assert body["session"]["is_running"] is False  # released in `finally`
 
-    fake_agent.crash = False
+    supervisor.crash = False
     retry = await send(client, "try again", body["session"]["id"])
     assert retry.status_code == 200 and retry.json()["assistant_message"]["status"] == "complete"
+
+
+@pytest.mark.integration
+async def test_a_crashing_agent_is_one_failed_call_not_a_failed_answer(
+    client: httpx.AsyncClient, fake_agent: FakeAgent
+) -> None:
+    """The DB agent raises -> its call is an error, the supervisor still answers, the turn completes."""
+    fake_agent.crash = True
+    assistant = (await send(client, "this agent will crash")).json()["assistant_message"]
+    assert assistant["status"] == "complete" and assistant["content"].startswith("Final answer for:")
+    [db_call] = assistant["payload"]["result"]["calls"]
+    assert db_call["status"] == "error" and db_call["error"] == "RuntimeError: Groq is unreachable"
 
 
 # ------------------------------------------------------------------ 404 / 422
@@ -218,6 +296,7 @@ async def test_unknown_chat_returns_404_everywhere(client: httpx.AsyncClient) ->
     assert (await client.get(f"/api/sessions/{unknown}/messages")).status_code == 404
     assert (await client.patch(f"/api/sessions/{unknown}", json={"title": "x"})).status_code == 404
     assert (await client.delete(f"/api/sessions/{unknown}")).status_code == 404
+    assert (await decide(client, 2_000_000_000, {"approved": True})).status_code == 404  # unknown message
 
 
 @pytest.mark.integration
@@ -226,6 +305,10 @@ async def test_invalid_input_returns_422(client: httpx.AsyncClient) -> None:
     assert (await client.post("/api/chat", json={"content": ""})).status_code == 422
     assert (await client.post("/api/chat", json={"content": "x" * 1001})).status_code == 422
     assert (await client.get("/api/sessions/not-a-uuid/messages")).status_code == 422
+    assert (await client.post("/api/messages/abc/email-approval", json={"approved": True})).status_code == 422
+    assert (await decide(client, 1, {})).status_code == 422  # `approved` is required
+    assert (await decide(client, 1, {"approved": "maybe"})).status_code == 422
+    assert (await decide(client, 1, {"approved": True, "edited_body": "x" * 5001})).status_code == 422
 
 
 # ------------------------------------------------------------------ pagination, rename, delete
@@ -293,12 +376,14 @@ async def test_agent_sees_only_the_last_3_exchanges_and_never_the_new_question(
 
 
 @pytest.mark.integration
-async def test_failed_turns_are_not_remembered(client: httpx.AsyncClient, fake_agent: FakeAgent) -> None:
+async def test_failed_turns_are_not_remembered(
+    client: httpx.AsyncClient, fake_agent: FakeAgent, supervisor: RuleSupervisor
+) -> None:
     """A turn whose answer failed (status 'error') is left out of memory."""
     session_id = (await send(client, "good question")).json()["session"]["id"]
-    fake_agent.crash = True
+    supervisor.crash = True
     await send(client, "crashing question", session_id)
-    fake_agent.crash = False
+    supervisor.crash = False
     await send(client, "follow-up", session_id)
 
     assert remembered_questions(fake_agent) == ["good question"]
@@ -316,31 +401,37 @@ async def test_memory_is_isolated_per_chat(client: httpx.AsyncClient, fake_agent
     assert remembered_questions(fake_agent) == ["contracts question"]
 
 
-# ------------------------------------------------------------------ routing between agents (plan 02, R7)
+# ------------------------------------------------------------------ which agents the orchestrator may use (plan 03)
 
 
 async def add_document(document_store: DocumentStore, session_id: str) -> None:
-    """Attach a (fake) document row to a chat: from then on, its messages go to the Doc agent."""
+    """Attach a (fake) document row to a chat: from then on, the orchestrator can ask its documents."""
     await document_store.create_document(uuid4(), UUID(session_id), "q3-report.pdf", "application/pdf", 1, uuid4().hex)
 
 
 @pytest.mark.integration
-async def test_a_chat_with_documents_is_answered_by_the_doc_agent(
-    client: httpx.AsyncClient, fake_agent: FakeAgent, fake_doc_agent: FakeDocAgent, document_store: DocumentStore
+async def test_ask_documents_is_offered_only_in_a_chat_with_documents(
+    client: httpx.AsyncClient,
+    fake_agent: FakeAgent,
+    fake_doc_agent: FakeDocAgent,
+    document_store: DocumentStore,
+    supervisor: RuleSupervisor,
 ) -> None:
-    """No documents -> the DB agent ("db"); after a document is added -> the Doc agent ("doc"), for THIS chat."""
+    """No documents -> no ask_documents tool (the DB agent answers); after an upload -> the Doc agent, THIS chat."""
     first = (await send(client, "How many vendors do we have?")).json()
     session_id = first["session"]["id"]
-    assert first["assistant_message"]["payload"]["agent"] == "db" and len(fake_agent.calls) == 1
+    assert "ask_documents" not in supervisor.calls[0].tool_names and len(fake_agent.calls) == 1
     route = first["assistant_message"]["payload"]["route"]
-    assert route["router"] == "rule" and route["agent"] == "db" and "no uploaded documents" in route["reason"]
+    assert route == {"router": "llm", "agent": "db", "reason": route["reason"]}
+    assert route["reason"].startswith('Asked the database agent: "[pytest] How many vendors')  # saved with it
 
     await add_document(document_store, session_id)
     second = (await send(client, "What credit applies if AWS breaches its SLA?", session_id)).json()
-    assert second["assistant_message"]["payload"]["agent"] == "doc"
-    reason = second["assistant_message"]["payload"]["route"]["reason"]
-    assert "1 uploaded document (q3-report.pdf)" in reason and "Document agent" in reason  # saved with the answer
-    assert second["assistant_message"]["payload"]["result"]["citations"][0]["filename"] == "q3-report.pdf"
+    assert "ask_documents" in supervisor.calls[-1].tool_names
+    payload = second["assistant_message"]["payload"]
+    assert payload["route"]["agent"] == "doc" and payload["result"]["passthrough"] is True
+    assert second["assistant_message"]["content"].endswith("[1]")  # the Doc agent's own citation (D9)
+    assert payload["result"]["calls"][0]["result"]["citations"][0]["filename"] == "q3-report.pdf"
     assert fake_doc_agent.calls[0]["session_id"] == UUID(session_id)  # it searches THIS chat's documents
     assert len(fake_agent.calls) == 1  # the DB agent wasn't asked again
 
@@ -357,6 +448,68 @@ async def test_memory_of_doc_answers_carries_their_sources(
 
     remembered = fake_doc_agent.calls[-1]["history"][-1]
     assert remembered.sources == "q3-report.pdf p.2" and remembered.sql is None
+
+
+# ------------------------------------------------------------------ email approval (plan 03, S13-S15)
+
+EMAIL_REQUEST = "Which invoices are overdue? Email them to accounts@company.example"
+
+
+@pytest.mark.integration
+async def test_an_email_waits_for_approval_and_the_chat_is_locked_until_then(client: httpx.AsyncClient) -> None:
+    """Draft -> awaiting_approval; a new message -> 409; approve (edited) -> the SAME message completes, sent."""
+    first = (await send(client, EMAIL_REQUEST)).json()
+    session_id, waiting = first["session"]["id"], first["assistant_message"]
+    assert waiting["status"] == "awaiting_approval" and first["session"]["is_running"] is False
+    assert waiting["content"].startswith("I drafted an email to accounts@company.example.")
+    assert waiting["payload"]["route"]["agent"] == "db → email"
+    draft = waiting["payload"]["result"]["email"]
+    assert draft["status"] == "awaiting_approval" and draft["to"] == ["accounts@company.example"]
+
+    blocked = await send(client, "and another question", session_id)
+    assert blocked.status_code == 409 and blocked.json()["detail"] == "Approve or reject the pending email first."
+
+    approved = await decide(client, waiting["id"], {"approved": True, "edited_body": "Shorter body."})
+    assert approved.status_code == 200
+    final = approved.json()["assistant_message"]
+    assert final["id"] == waiting["id"] and final["status"] == "complete"
+    assert final["content"] == f"Final answer for: {TEST_PREFIX} {EMAIL_REQUEST}"
+    email = final["payload"]["result"]["email"]
+    assert email["status"] == "sent" and email["body"] == "Shorter body." and email["message_id"]
+    assert final["latency_ms"] >= waiting["latency_ms"]
+
+    assert (await decide(client, waiting["id"], {"approved": True})).status_code == 409  # decided already
+    assert (await send(client, "thanks", session_id)).status_code == 200  # the chat is unlocked
+
+
+@pytest.mark.integration
+async def test_rejecting_completes_the_answer_without_sending(client: httpx.AsyncClient) -> None:
+    """Reject -> the message completes with the email marked rejected; nothing was sent."""
+    waiting = (await send(client, EMAIL_REQUEST)).json()["assistant_message"]
+    rejected = (await decide(client, waiting["id"], {"approved": False})).json()["assistant_message"]
+    assert rejected["status"] == "complete" and rejected["payload"]["result"]["email"]["status"] == "rejected"
+    assert [c["status"] for c in rejected["payload"]["result"]["calls"]] == ["ok", "rejected"]
+
+
+@pytest.mark.integration
+async def test_only_a_message_awaiting_approval_can_be_decided(client: httpx.AsyncClient) -> None:
+    """A normal answer (or a question) isn't waiting for anything -> 409, and nothing changes."""
+    body = (await send(client, "Which vendors are in India?")).json()
+    for message in (body["user_message"], body["assistant_message"]):
+        response = await decide(client, message["id"], {"approved": True})
+        assert response.status_code == 409 and "not waiting for an email approval" in response.json()["detail"]
+
+
+@pytest.mark.integration
+async def test_an_awaiting_answer_is_left_out_of_memory_until_decided(
+    client: httpx.AsyncClient, fake_agent: FakeAgent
+) -> None:
+    """Memory reads only complete answers: the paused turn joins it once the email is decided."""
+    first = (await send(client, EMAIL_REQUEST)).json()
+    await decide(client, first["assistant_message"]["id"], {"approved": False})
+    await send(client, "and only the ones in India?", first["session"]["id"])
+    assert remembered_questions(fake_agent) == [EMAIL_REQUEST]
+    assert fake_agent.calls[-1]["history"][0].sql.startswith("SELECT")  # the db call's SQL, from the payload
 
 
 def test_make_title_cuts_long_questions_at_a_word() -> None:

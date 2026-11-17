@@ -1,14 +1,15 @@
-"""HTTP endpoints for chat sessions (plan 01, section 7).
+"""HTTP endpoints for chat sessions (plan 01, section 7; plan 03, section 11.2).
 
-    POST   /api/chat                          send a message (new chat if session_id is null)
-    GET    /api/sessions                      sidebar: chats, most recently active first
-    GET    /api/sessions/{id}/messages        transcript, oldest to newest (?limit, ?before)
-    PATCH  /api/sessions/{id}                 rename
-    DELETE /api/sessions/{id}                 delete (messages go with it)
+    POST   /api/chat                              send a message (new chat if session_id is null)
+    POST   /api/messages/{id}/email-approval      approve / edit / reject the email draft of an answer
+    GET    /api/sessions                          sidebar: chats, most recently active first
+    GET    /api/sessions/{id}/messages            transcript, oldest to newest (?limit, ?before)
+    PATCH  /api/sessions/{id}                     rename
+    DELETE /api/sessions/{id}                     delete (messages go with it)
 
 This layer only does HTTP: validation (Pydantic, automatic 422), status codes, and
 turning the service's exceptions into 404/409. The logic lives in service.py and store.py.
-Path ids are typed `UUID`, so FastAPI answers 422 for a malformed id before our code runs.
+Path ids are typed (UUID, int), so FastAPI answers 422 for a malformed id before our code runs.
 """
 
 from typing import Annotated
@@ -16,49 +17,64 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
-from app.chat.models import ChatRequest, ChatResponse, MessagePage, RenameRequest, Session
-from app.chat.service import SessionBusyError, SessionNotFoundError, send_message
+from app.chat.models import ApprovalResponse, ChatRequest, ChatResponse, MessagePage, RenameRequest, Session
+from app.chat.service import (
+    ApprovalPendingError,
+    MessageNotFoundError,
+    NotAwaitingApprovalError,
+    SessionBusyError,
+    SessionNotFoundError,
+    resolve_email_approval,
+    send_message,
+)
 from app.config import get_settings
-from app.dependencies import ChatStoreDep, DBAgentDep, DocAgentDep, DocumentStoreDep
+from app.dependencies import ChatStoreDep, OrchestratorDep
+from app.orchestrator.models import EmailDecision
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
+# Service exceptions -> HTTP status codes (shared by both endpoints that run the orchestrator).
+ERROR_STATUS = {
+    SessionNotFoundError: status.HTTP_404_NOT_FOUND,
+    MessageNotFoundError: status.HTTP_404_NOT_FOUND,
+    SessionBusyError: status.HTTP_409_CONFLICT,
+    ApprovalPendingError: status.HTTP_409_CONFLICT,
+    NotAwaitingApprovalError: status.HTTP_409_CONFLICT,
+}
+
 
 @router.post("/chat")
-async def chat(
-    body: ChatRequest, store: ChatStoreDep, documents: DocumentStoreDep, db_agent: DBAgentDep, doc_agent: DocAgentDep
-) -> ChatResponse:
+async def chat(body: ChatRequest, store: ChatStoreDep, orchestrator: OrchestratorDep) -> ChatResponse:
     """Send one message and wait for the answer. Both are saved before this returns.
 
-    Which agent answers (plan 02, decision D12, until the Phase 2 orchestrator replaces it):
-    a chat with at least one uploaded document -> the Doc agent; otherwise -> the DB agent.
-    New chats (no session_id) go to the DB agent; uploading a file creates its own chat.
-    The agent sees the last CHAT_MEMORY_TURNS exchanges of this chat as memory.
-    404: the session doesn't exist. 409: this chat is still answering a previous message.
+    The orchestrator (plan 03) decides which agents to ask: the database, this chat's documents, the
+    web, and/or an email draft. The agents see the last CHAT_MEMORY_TURNS exchanges of this chat.
+    If it drafts an email, the answer comes back with status "awaiting_approval": decide with
+    POST /api/messages/{id}/email-approval.
+    404: the session doesn't exist. 409: this chat is still answering, or an email waits for approval.
     """
-    chat_documents = await documents.list_documents(body.session_id) if body.session_id else []
-    agent = doc_agent if chat_documents else db_agent
-    route = {"router": "rule", "agent": agent.name, "reason": route_reason([d.filename for d in chat_documents])}
     memory_turns = get_settings().chat_memory_turns
     try:
-        return await send_message(store, agent, body.session_id, body.content.strip(), memory_turns, route)
-    except SessionNotFoundError as error:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from error
-    except SessionBusyError as error:
-        raise HTTPException(status.HTTP_409_CONFLICT, str(error)) from error
+        return await send_message(store, orchestrator, body.session_id, body.content.strip(), memory_turns)
+    except tuple(ERROR_STATUS) as error:
+        raise HTTPException(ERROR_STATUS[type(error)], str(error)) from error
 
 
-def route_reason(filenames: list[str]) -> str:
-    """Why the message went to this agent, in one sentence (saved with the answer, shown in the UI's flow panel).
+@router.post("/messages/{message_id}/email-approval")
+async def email_approval(
+    message_id: int, body: EmailDecision, store: ChatStoreDep, orchestrator: OrchestratorDep
+) -> ApprovalResponse:
+    """Approve (optionally with an edited body) or reject the email draft of an answer.
 
-    Today the router is a fixed rule; the Phase 2 orchestrator will replace it with an LLM decision
-    and its own reasoning ("router": "llm").
+    The paused orchestrator run continues: it sends or discards the draft and writes the final
+    answer, which replaces the "awaiting approval" message. Nothing is ever sent without this call.
+    404: no such message. 409: the message isn't waiting for a decision, or the chat is busy.
+    422: invalid body (e.g. `approved` missing, or edited_body over 5,000 characters).
     """
-    if not filenames:
-        return "This chat has no uploaded documents, so the question goes to the Database agent (business data)."
-    shown = ", ".join(filenames[:2]) + (f" and {len(filenames) - 2} more" if len(filenames) > 2 else "")
-    count = f"{len(filenames)} uploaded document" + ("" if len(filenames) == 1 else "s")
-    return f"This chat has {count} ({shown}), so questions here go to the Document agent."
+    try:
+        return await resolve_email_approval(store, orchestrator, message_id, body)
+    except tuple(ERROR_STATUS) as error:
+        raise HTTPException(ERROR_STATUS[type(error)], str(error)) from error
 
 
 @router.get("/sessions")

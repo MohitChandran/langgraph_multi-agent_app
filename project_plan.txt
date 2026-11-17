@@ -1,9 +1,11 @@
 ENTERPRISE MULTI-AGENT OPS PLATFORM — PROJECT PLAN
-Last updated: 2026-11-16
+Last updated: 2026-11-18
 Status: Phase 1 (DB agent) and Phase 3 (Doc QA RAG agent) built and working; their evals are still to do.
-        Chat sessions + memory (plannings/01) and most of the chat UI are built early. A fixed rule picks the
-        agent today (chat with documents -> Doc agent, else DB agent). Next: Phase 2 orchestrator
-        (plannings/03-orchestrator.md, being written in the planning session), then the evals.
+        Chat sessions + memory (plannings/01) and most of the chat UI are built early.
+        Phase 2 orchestrator (plannings/03-orchestrator.md) O0-O4 built: a ReAct supervisor answers every chat
+        message through the DB, Doc and (dummy) web/email agents, with code-enforced limits and email approval
+        that survives a restart. Next: O5 (UI: calls panel + approval card), O6 (orchestration eval), then the
+        R9 / SQL evals.
 
 ══════════════════════════════════════════════════════════════════════════════════════════════
 0. DECISION LOG
@@ -288,6 +290,11 @@ Rule: Claude writes the code and explains every file/function; interview prep ha
 [ ] Phase 2 — Orchestrator v1
     Build: LangGraph supervisor with only the DB agent; FastAPI endpoint with SSE streaming;
            Postgres checkpointer; Langfuse tracing.
+    Plan: plannings/03-orchestrator.md (stages O0-O6). Decided there: a ReAct supervisor over ALL agents
+          (dummy web/email for now), no streaming yet, Langfuse at the very end.
+    Steps: [x] O0-O4 (2026-11-17/18): agents as tools, safety guards in code, the ReAct graph, email approval
+               with the Postgres checkpointer, /api/chat through the orchestrator + approval endpoint
+           [ ] O5 frontend (calls panel, approval card)  [ ] O6 orchestration eval + safety cases
     Learn: StateGraph, typed state, conditional edges, checkpointing, streaming, tracing.
 
 [ ] Phase 3 — Doc QA Agent

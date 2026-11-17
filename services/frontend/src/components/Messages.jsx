@@ -1,14 +1,17 @@
 /**
  * Chat rows, rendered from messages in the API's shape (as stored in Postgres):
- *   { id, role: "user"|"assistant", content, status: "pending"|"complete"|"error", payload, latency_ms }
+ *   { id, role: "user"|"assistant", content, status: "pending"|"complete"|"error"|"awaiting_approval", payload,
+ *     latency_ms }
  *
  *   UserMessage      - the question, right-aligned in a rounded bubble
  *   AssistantMessage - picks its look from `status` (thinking / error / answer) and, for answers,
- *                      from `payload.agent`: "doc" answers get citations and sources (DocAnswer.jsx)
+ *                      from `payload.agent`: "doc" answers get citations and sources (DocAnswer.jsx),
+ *                      "orchestrator" answers (plan 03) get their route and reasoning (AgentFlow.jsx)
  *   ThinkingMessage  - spinning sparkle + shimmering lines while the agent works
  */
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import AgentFlow from "./AgentFlow.jsx";
 import DocAnswer from "./DocAnswer.jsx";
 import { SparkleIcon } from "./icons.jsx";
 import ResultDetails from "./ResultDetails.jsx";
@@ -50,6 +53,16 @@ export function AssistantMessage({ message, thinkingLabel }) {
           <p className="error-text">{message.content}</p>
         ) : message.payload?.agent === "doc" && result ? (
           <DocAnswer message={message} />
+        ) : message.payload?.agent === "orchestrator" ? (
+          // Plan 03, stage O4: the answer plus the orchestrator's route and reasoning. Its result has no
+          // rows/columns (those are per agent call), so the DB panels below would crash on it. Stage O5
+          // adds the per-call panels and the email approval card.
+          <>
+            <div className="markdown">
+              <Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
+            </div>
+            {result && <AgentFlow payload={message.payload} result={result} />}
+          </>
         ) : (
           <>
             <div className="markdown">

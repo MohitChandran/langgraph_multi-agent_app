@@ -13,6 +13,8 @@ back into the prompt each time (plan 01, section 5):
 The SQL is included on purpose: for a follow-up like "only the ones in India", the
 easiest correct move is to take the previous query and add a filter. For Doc agent answers
 the cited files and pages are included instead ("Sources1: q3-report.pdf p.2").
+Orchestrator answers (plan 03) may combine several agents: they're remembered with the SQL of
+their last successful database call and the sources of all their document and web calls.
 """
 
 from dataclasses import dataclass
@@ -48,16 +50,33 @@ async def load_history(store: ChatStore, session_id: UUID, max_turns: int) -> li
     rows = await store.recent_complete_messages(session_id, limit=max_turns * 2)
     rows.reverse()  # oldest first
     turns = [
-        ConversationTurn(
-            question=question["content"],
-            answer=answer["content"],
-            sql=answer["sql"],
-            sources=_sources_text(answer["citations"]) if answer["agent"] == "doc" else None,
-        )
+        _turn(question, answer)
         for question, answer in zip(rows, rows[1:], strict=False)
         if question["role"] == "user" and answer["role"] == "assistant"
     ]
     return turns[-max_turns:]
+
+
+def _turn(question: dict, answer: dict) -> ConversationTurn:
+    """One exchange as memory, whichever agent answered: db (SQL), doc (sources), orchestrator (both)."""
+    if answer["agent"] == "orchestrator":
+        sql, sources = _orchestrator_memory(answer.get("calls") or [])
+    elif answer["agent"] == "doc":
+        sql, sources = answer["sql"], _sources_text(answer["citations"])
+    else:
+        sql, sources = answer["sql"], None
+    return ConversationTurn(question=question["content"], answer=answer["content"], sql=sql, sources=sources)
+
+
+def _orchestrator_memory(calls: list[dict]) -> tuple[str | None, str | None]:
+    """(SQL, sources) of an orchestrator answer: its last successful database call's SQL, and the
+    cited document pages plus the web pages of all its calls ("q3-report.pdf p.2; https://...")."""
+    ok = [call for call in calls if call.get("status") == "ok"]
+    sql = next((call["sql"] for call in reversed(ok) if call.get("agent") == "db" and call.get("sql")), None)
+    citations = [citation for call in ok if call.get("agent") == "doc" for citation in call.get("citations") or []]
+    urls = [source["url"] for call in ok if call.get("agent") == "web" for source in call.get("sources") or []]
+    parts = [_sources_text(citations), "; ".join(dict.fromkeys(urls)) or None]
+    return sql, "; ".join(part for part in parts if part) or None
 
 
 def _sources_text(citations: list[dict] | None) -> str | None:

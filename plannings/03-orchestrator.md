@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Final plan, 2026-11-17. O0 + O1 done 2026-11-17 (dev session; notes in Section 20). |
+| **Status** | Final plan, 2026-11-17. O0 + O1 done 2026-11-17, O2-O4 done 2026-11-18 (dev session; notes in Section 20). |
 | **Written in** | a planning session. (Exception: at the user's request it also wrote the dummy web/email agents: `app/agents/web/dummy.py`, `app/agents/email/dummy.py`, `tests/test_dummy_agents.py`, not committed yet.) |
 | **Implement in** | a development session, stage by stage (Section 15). |
 | **Project plan** | `project_plan.txt` **Phase 2 (Orchestrator)** + the approval part of **Phase 6 (HITL)**, using dummy web/email agents until Phases 4–5 build the real ones. |
@@ -487,13 +487,13 @@ Rough effort: O0 ½ day · O1 1 · O2 1½ · O3 1 · O4 1 · O5 1½ · O6 1 day.
 - `uv add langgraph-checkpoint-postgres`. Add the settings (Section 14). Delete the empty `app/graph/` stubs.
 **Acceptance:** `uv run pytest` is green; `from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver` imports.
 
-### [x] O1 — Tools, guards, models  (done 2026-11-17, not committed)
+### [x] O1 — Tools, guards, models  (done 2026-11-17)
 `orchestrator/models.py`, `tools.py` (schemas, `AgentTools`, `summarize_for_llm`, relabelling), `guards.py` (S1, S2, S7–S12 as
 pure functions + `extract_user_emails`).
 **Acceptance:** unit tests for every guard and both summarizers pass. A CLI or test shows `summarize_for_llm` output for one
 real DB result (≤ 2,000 chars, SQL included).
 
-### [ ] O2 — The ReAct loop (no email pause yet)
+### [x] O2 — The ReAct loop (no email pause yet)  (done 2026-11-18)
 `prompts.py`; `graph.py` with `prepare`, `supervisor`, `tools`, `force_answer`, `fallback`, `finalize` + routers;
 `draft_email` temporarily refused with "email not enabled yet". CLI with an `InMemorySaver`.
 **Acceptance** (real Groq, CLI):
@@ -502,7 +502,7 @@ real DB result (≤ 2,000 chars, SQL included).
 - a 2-part question (DB + web) → 2 calls, then a combined answer with "(database)" and [W1] labels;
 - a scripted fake LLM that always calls tools stops at 4 tool calls and gets a forced answer (test).
 
-### [ ] O3 — Email approval with the Postgres checkpointer
+### [x] O3 — Email approval with the Postgres checkpointer  (done 2026-11-18)
 `approval` + `send_email` nodes; S11–S15; `checkpoint.py`; `ask()`/`resume_email()` pause handling; the CLI prompts
 approve/reject/edit.
 **Acceptance:**
@@ -513,7 +513,7 @@ approve/reject/edit.
 - restarting the API while paused, then approving, still resumes the graph (and the dummy reports "draft no longer
   exists").
 
-### [ ] O4 — Chat integration
+### [x] O4 — Chat integration  (done 2026-11-18)
 Section 11 (service, routes, store migration, memory, lifespan, dependencies).
 **Acceptance (via `/docs`):**
 - `POST /api/chat` answers through the orchestrator, and the payload has `calls`;
@@ -636,3 +636,65 @@ on the installed versions. Settings in `config.py` + `.env.example` (Section 14)
 8. **S10 with two `draft_email` calls in one message:** both are refused ("call it alone"); the LLM retries with one.
 9. **`AgentCall.status="ok"`** means the agent ran, even if it couldn't answer (`result.success=false`); exceptions and
    timeouts are `"error"`. The D9 passthrough (O2) will require `ok` **and** `result.success`.
+
+**O2 (2026-11-18).** `prompts.py`, `graph.py` (class `Orchestrator`, nodes, routers, CLI); `get_llm("orchestrator")`.
+20 loop tests with a scripted fake LLM (`tests/orchestrator_fakes.py`, `tests/test_orchestrator_graph.py`).
+Real Groq, CLI: the greeting → no calls; "Which vendors have overdue invoices?" → one `ask_database`, passthrough;
+DB + web → 2 calls, answer with "(database)" and [W1][W2]. Deviations:
+1. **No temporary "email not enabled" refusal:** O3 followed right away, so `approval`/`send_email` were built in O2.
+2. **`steps` has an `operator.add` reducer:** each node returns only its own name.
+3. **`passthrough`** in the state and in `OrchestratorResult` (D9): the UI must know when the answer keeps the agent's
+   own `[n]` citations instead of `[D1]`/`[W1]` labels.
+4. **With no tool calls left, the supervisor is called with no tools bound** (happens after an email that used the
+   last call): it can only answer, instead of making a call that is refused anyway.
+5. **An empty LLM reply counts as an LLM error** (S19). **Unparsable tool calls** (`invalid_tool_calls`) get a refused
+   ToolMessage: langchain-groq sends them back to Groq, so they need an answer too.
+6. **`ask()`/`resume_email()` use `astream(["updates", "values"])`** instead of `ainvoke`, for an `on_update` callback
+   (the CLI prints every node as it runs); same `durability="exit"`.
+7. **D9 precisely:** exactly one executed (not refused) `ask_*`/`search_web` call, `status="ok"` and `result.success`,
+   and no `draft_email` call of any status.
+8. **Prompt, citation rule made explicit** ("[D...] only for documents, [W...] only for web pages; database results
+   have no labels: write (database)"): in a real run gpt-oss-20b invented [D1] for a database fact. Unknown labels are
+   removed together with their leading space.
+9. **Failed results** answer with the generic text; the exception goes to the log only.
+10. CLI flags: `--postgres` (Postgres checkpointer), `--session` (that chat's documents + memory; loads the Doc agent's
+    models), `--diagram`.
+
+**O3 (2026-11-18).** `checkpoint.py` (class `CheckpointStore`: own pool + `AsyncPostgresSaver`, `thread_ids()`,
+`delete_orphans()`); 7 Postgres integration tests (`test_orchestrator_checkpoint.py`). Real Groq: scenario 1 pauses
+(1 row in `app.checkpoints`), approve → "sent", reject → "rejected", 0 rows after; S11 refused a contract owner's
+address that only the database returned, and the supervisor asked the user to confirm it. Findings and changes:
+1. **gpt-oss-20b sometimes broke `draft_email`'s JSON** when it put a markdown TABLE in `content` (closed the object
+   before `subject`/`to`) → Groq 400 `tool_use_failed`, counted as an LLM error (twice in a row once → forced answer,
+   no draft). The `content` field description now asks for plain lines, no tables, no greeting/signature: 8/8 OK (was
+   6/8), and ~30% fewer output tokens.
+2. **Email outcome texts:** the rejection adds "Tell the user."; a failed send became "NOT SENT: the email could not
+   be sent (...). Tell the user it was not sent; they can ask again." (after an API restart the supervisor once offered
+   to send the draft instead), plus a prompt line "After a draft, say plainly whether it was sent, rejected, or could not
+   be sent." 5/5 answers then said "not sent".
+3. **Strict msgpack is read when a serializer is CREATED** (`JsonPlusSerializer.__init__`), not when it loads. The
+   restart test sets it before creating the "restarted" saver; verified that strict mode turns our own classes into
+   plain dicts (so the plain-JSON state matters) and loads LangChain messages normally.
+4. Orphan cleanup uses `ChatStore.awaiting_approval_message_ids()`; thread ids whose tail isn't a number (CLI runs)
+   count as orphans.
+
+**O4 (2026-11-18).** Section 11 built; 235 tests in total. Live API (real Groq, Postgres): `/api/chat` answers through the
+orchestrator with `calls` in the payload; "and only the ones in India?" → the db call asked "Which vendors in India
+have overdue invoices?"; scenario 1 → `awaiting_approval`, a second message → 409; approval → the same message completes
+("sent"); API restarted while paused → approval still resumes the graph, the dummy says the draft is gone, nothing sent;
+`GROQ_ORCHESTRATOR_MODEL=no-such-model` → two 404s → the fixed rule (DB agent) answers. Deviations:
+1. **Constraint migration** runs inside a `DO` block only when the constraint lacks `awaiting_approval` (no ALTER on
+   every startup); `CREATE TABLE` now names `chat_messages_status_check` itself.
+2. **The S15 check runs after claiming the session**, so no second turn can start between the check and the claim.
+3. **The approval body is `EmailDecision` itself** (the API and the paused graph validate with the same model);
+   the response is `ApprovalResponse {session, assistant_message}`. `get_message()` returns `(session_id, Message)`.
+4. **Latency** of an approved answer = the time before the pause + the time after it.
+5. **Memory:** `recent_complete_messages` also returns `calls` (agent, status, SQL, citations, web sources per call;
+   never rows), and `memory._orchestrator_memory()` turns them into the turn's SQL + sources.
+6. Removed `route_reason()` and the unused `get_doc_agent`/`DocAgentDep` (the rule lives on only as the fallback).
+7. **Frontend stopgap (`Messages.jsx`):** orchestrator answers render as markdown + `AgentFlow`. The DB panels would
+   crash on them (`result.rows` is undefined). An `awaiting_approval` message shows its text without buttons until
+   O5; meanwhile approve via `/docs`.
+8. API tests run the REAL orchestrator with a rule-based fake supervisor (`RuleSupervisor`), so memory and routing
+   tests go through the whole loop. "Agent crash → error message" became "orchestrator crash → error message" and
+   "agent crash → one failed call, the turn completes".

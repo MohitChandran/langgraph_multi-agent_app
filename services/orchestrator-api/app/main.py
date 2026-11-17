@@ -1,12 +1,12 @@
 """FastAPI entrypoint: exposes the agents over HTTP so a browser UI can use them.
 
 Endpoints:
-  - /api/chat, /api/sessions/...  chat sessions with saved history and memory (app/chat/routes.py)
+  - /api/chat, /api/sessions/...  chat sessions with saved history and memory, answered by the
+                                  orchestrator (app/chat/routes.py)
+  - /api/messages/{id}/email-approval  approve / reject an email the orchestrator drafted
   - /api/documents/...            document upload, status, files (app/documents/routes.py)
   - POST /api/db/ask              one-off question to the DB agent, nothing saved (CLI, debugging, evals)
   - GET /api/health               liveness check
-In Phase 2 this grows into the gateway for the LangGraph orchestrator (streaming,
-file uploads, HITL resume).
 
 Run it (from services/orchestrator-api):
     uv run uvicorn app.main:app --reload --port 8000
@@ -37,12 +37,18 @@ from app.agents.doc.retrieval import Retriever
 from app.agents.doc.store import DocumentStore
 from app.agents.doc.vision import VISION_MAX_TOKENS, describe_picture
 from app.agents.doc.worker import IngestionWorker
+from app.agents.email.dummy import DummyEmailAgent
+from app.agents.web.dummy import DummyWebSearchAgent
 from app.chat.routes import router as chat_router
 from app.chat.store import ChatStore
 from app.config import get_settings
 from app.dependencies import DBAgentDep
 from app.documents.routes import router as documents_router
 from app.llm import get_llm
+from app.orchestrator.checkpoint import CheckpointStore
+from app.orchestrator.graph import Orchestrator
+from app.orchestrator.models import Limits
+from app.orchestrator.tools import AgentTools
 
 # Uvicorn only configures its own loggers; without this, messages from our app.* modules are dropped.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s - %(message)s")
@@ -59,7 +65,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
          'pending' by a crash or restart as errors (app.state.chat_store)
       3. open the document pool and create the document tables (app.state.document_store)
       4. load the document models ONCE (embedder, reranker, tokenizer, Docling converter; plan
-         gotcha 6), build the Doc agent, recover interrupted documents, start the ingestion worker
+         gotcha 6), build the Doc agent
+      5. build the orchestrator (plan 03): the agents as tools (dummy web/email agents for now), the
+         Postgres checkpointer for paused email approvals, minus checkpoints nobody can approve any
+         more (app.state.orchestrator)
+      6. recover interrupted documents and start the ingestion worker
     After the server stops: stop the worker first, then close all pools.
 
     AsyncExitStack closes whatever was opened, in reverse order, even if a later step
@@ -100,6 +110,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             document_store, retriever, settings.rag_top_k, settings.rag_context_tokens, settings.rag_min_rerank_score
         )
         logger.info("Doc agent ready (rerank: %s)", reranker.model_name if reranker else "off")
+
+        # The orchestrator calls the agents above as tools. Web search and email are dummies until
+        # Phases 4-5 build the real ones; only these two lines change then.
+        tools = AgentTools(
+            app.state.db_agent,
+            app.state.doc_agent,
+            DummyWebSearchAgent(settings.dummy_agent_delay_seconds),
+            DummyEmailAgent(settings.dummy_agent_delay_seconds),
+            document_store,
+            Limits.from_settings(settings),
+        )
+        checkpoints = await stack.enter_async_context(CheckpointStore(settings.app_database_url))
+        await checkpoints.setup()
+        orphans = await checkpoints.delete_orphans(await chat_store.awaiting_approval_message_ids())
+        app.state.orchestrator = Orchestrator(tools, checkpoints.saver)
+        logger.info(
+            "Orchestrator ready (%s; %d stale checkpoint threads deleted)", settings.groq_orchestrator_model, orphans
+        )
 
         worker = IngestionWorker(
             document_store,

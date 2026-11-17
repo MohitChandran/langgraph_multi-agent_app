@@ -1,34 +1,38 @@
-"""One chat turn, start to finish (plan 01, section 6).
+"""One chat turn, start to finish (plan 01 section 6; plan 03 section 11.1 for the orchestrator).
 
     1  no session_id?  create the session (a chat is created by its first message)
     2  claim the session: one reply at a time per chat (404 if unknown, 409 if busy)
-    3  load memory: the last few exchanges of THIS chat (before saving the new question!)
-    4  save the question + a 'pending' answer slot, in one transaction
-    5  run the agent with the question and the memory
-    6  save the answer (or the error) into that slot
-    7  ALWAYS release the claim (finally), so a crash can't leave the chat stuck "busy"
+    3  an email in this chat still waits for approval?  409 (S15), nothing is saved
+    4  load memory: the last few exchanges of THIS chat (before saving the new question!)
+    5  save the question + a 'pending' answer slot, in one transaction
+    6  run the orchestrator with the question and the memory
+    7  save its result into that slot: complete, error, or awaiting_approval (an email draft waits)
+    8  ALWAYS release the claim (finally), so a crash can't leave the chat stuck "busy"
+
+An answer that waits for approval is finished later by resolve_email_approval(): the user's
+decision resumes the paused orchestrator run, and the SAME message gets the final answer.
 
 This module knows nothing about HTTP: routes.py turns its exceptions into status codes.
-It takes the store and the agent as parameters, so tests pass a fake agent.
+It takes the store and the orchestrator as parameters, so tests pass fakes.
 """
 
 import logging
 import time
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 import psycopg
 
-from app.agents.db.models import DBAgentResult
-from app.agents.doc.models import DocAgentResult
 from app.chat.memory import ConversationTurn, load_history
-from app.chat.models import ChatResponse, Message
+from app.chat.models import ApprovalResponse, ChatResponse, Message
 from app.chat.store import ChatStore
+from app.orchestrator.models import EmailDecision, OrchestratorResult
 
 logger = logging.getLogger(__name__)
 
 TITLE_MAX_CHARS = 60
 AGENT_FAILED_TEXT = "Sorry, something went wrong while answering. Please try again."
+APPROVAL_PENDING_TEXT = "Approve or reject the pending email first."
 
 
 class SessionNotFoundError(LookupError):
@@ -39,23 +43,39 @@ class SessionBusyError(RuntimeError):
     """The session is already generating a reply; only one at a time is allowed."""
 
 
-class ChatAgent(Protocol):
-    """What the chat service needs from an agent: a name and an async `ask`.
+class ApprovalPendingError(RuntimeError):
+    """An answer in this chat waits for an email decision; no new message until then (S15)."""
 
-    A Protocol is "duck typing with a type check": any object with a matching `name` and
-    `ask` fits, without inheriting from anything. DBAgent and DocAgent fit; so do test fakes.
-    `name` is saved with every answer (payload.agent), so the UI and memory know who answered.
+
+class MessageNotFoundError(LookupError):
+    """No message with this id (the approval endpoint)."""
+
+
+class NotAwaitingApprovalError(RuntimeError):
+    """The message isn't waiting for an email decision (already decided, or never had an email)."""
+
+
+class ChatOrchestrator(Protocol):
+    """What the chat service needs from the orchestrator (app/orchestrator/graph.py). Tests pass fakes.
+
+    A Protocol is "duck typing with a type check": any object with matching methods fits,
+    without inheriting from anything.
     """
 
     name: str
 
     async def ask(
-        self, question: str, history: list[ConversationTurn] | None = None, session_id: UUID | None = None
-    ) -> DBAgentResult | DocAgentResult:
-        """Answer one question, using the earlier exchanges of the chat as context.
+        self,
+        question: str,
+        history: list[ConversationTurn] | None = None,
+        session_id: UUID | None = None,
+        message_id: int | str | None = None,
+    ) -> OrchestratorResult:
+        """Answer one question; may pause for an email approval (status "awaiting_approval")."""
+        ...
 
-        session_id tells the Doc agent which chat's documents to search; the DB agent ignores it.
-        """
+    async def resume_email(self, session_id: UUID | None, message_id: int | str, decision: EmailDecision) -> Any:
+        """Continue a paused turn with the human's decision."""
         ...
 
 
@@ -70,34 +90,33 @@ def make_title(content: str) -> str:
 
 async def send_message(
     store: ChatStore,
-    agent: ChatAgent,
+    orchestrator: ChatOrchestrator,
     session_id: UUID | None,
     content: str,
     memory_turns: int = 3,
-    route: dict[str, str] | None = None,
 ) -> ChatResponse:
     """Run one turn and return the session plus the saved question and answer.
 
-    `memory_turns` = how many earlier exchanges of this chat the agent sees (CHAT_MEMORY_TURNS).
-    `route` = how and why this agent was chosen ({"router", "agent", "reason"}); saved with the answer.
+    `memory_turns` = how many earlier exchanges of this chat the orchestrator sees (CHAT_MEMORY_TURNS).
 
-    If the agent itself crashes (e.g. Groq unreachable after its retries), the answer is
-    saved with status 'error' and a readable text, and the turn still returns normally:
-    the failure is part of the transcript, exactly what a reload would show.
+    If the orchestrator fails (e.g. Groq unreachable after its retries and fallbacks), the answer
+    is saved with status 'error' and a readable text, and the turn still returns normally: the
+    failure is part of the transcript, exactly what a reload would show.
 
     Raises:
         SessionNotFoundError: unknown session_id, or the chat was deleted mid-turn.
         SessionBusyError: another reply is still being generated in this chat.
+        ApprovalPendingError: an email in this chat waits for approval (S15).
     """
     if session_id is None:
         session_id = (await store.create_session(make_title(content))).id
 
-    if await store.claim_session(session_id) is None:
-        if await store.get_session(session_id) is None:
-            raise SessionNotFoundError(f"Chat {session_id} does not exist.")
-        raise SessionBusyError("A reply is still being generated in this chat.")
-
+    await _claim(store, session_id)
     try:
+        # Checked AFTER claiming: the claim and the awaiting status are both set by the turn that
+        # holds the chat, so no second turn can slip in between the check and the start.
+        if await store.has_awaiting_approval(session_id):
+            raise ApprovalPendingError(APPROVAL_PENDING_TEXT)
         # Memory first: once the question is saved, it would show up in its own history.
         history = await load_history(store, session_id, memory_turns)
         try:
@@ -106,7 +125,12 @@ async def send_message(
             raise SessionNotFoundError(f"Chat {session_id} was deleted.") from error
 
         started = time.perf_counter()
-        assistant_message = await _run_agent(store, agent, pending, content, history, session_id, route, started)
+        try:
+            result = await orchestrator.ask(content, history, session_id, pending.id)
+        except Exception:  # the orchestrator catches its own failures; this is the last safety net
+            logger.exception("Orchestrator crashed for message %s", pending.id)
+            result = None
+        assistant_message = await save_result(store, pending.id, result, _elapsed_ms(started))
     finally:
         session = await store.release_session(session_id)
 
@@ -115,33 +139,93 @@ async def send_message(
     return ChatResponse(session=session, user_message=user_message, assistant_message=assistant_message)
 
 
-async def _run_agent(
-    store: ChatStore,
-    agent: ChatAgent,
-    pending: Message,
-    question: str,
-    history: list[ConversationTurn],
-    session_id: UUID,
-    route: dict[str, str] | None,
-    started: float,
-) -> Message | None:
-    """Ask the agent and fill the pending answer with its result, or with an error if it crashed.
+async def resolve_email_approval(
+    store: ChatStore, orchestrator: ChatOrchestrator, message_id: int, decision: EmailDecision
+) -> ApprovalResponse:
+    """Apply the user's decision on an email draft and finish the paused answer (plan 03, 11.1).
 
-    The payload keeps everything the UI's "Show SQL & data" panel needs (SQL, rows,
-    steps...) under "result"; the answer text itself goes into the message content.
-    "agent" records which agent answered ("db" or "doc"): one chat can mix both.
-    Returns None if the message vanished (its chat was deleted while the agent ran).
+    The paused orchestrator run is resumed (send or discard the draft, then the final answer), and
+    the SAME assistant message is completed: its content and payload are replaced by the final result.
+
+    Raises:
+        MessageNotFoundError: no such message (404).
+        NotAwaitingApprovalError: the message isn't waiting for a decision (409).
+        SessionBusyError: the chat is busy, e.g. the same decision was sent twice at once (409).
+        SessionNotFoundError: the chat was deleted meanwhile (404).
     """
-    try:
-        result = await agent.ask(question, history, session_id)
-    except Exception:
-        logger.exception("Agent failed for message %s", pending.id)
-        return await store.fail_message(pending.id, AGENT_FAILED_TEXT, _elapsed_ms(started))
+    found = await store.get_message(message_id)
+    if found is None:
+        raise MessageNotFoundError(f"Message {message_id} does not exist.")
+    session_id, message = found
+    if message.status != "awaiting_approval":
+        raise NotAwaitingApprovalError("This message is not waiting for an email approval.")
 
-    payload = {"agent": agent.name, "result": result.model_dump(mode="json", exclude={"question", "answer"})}
-    if route:
-        payload["route"] = route
-    return await store.complete_message(pending.id, result.answer, payload, _elapsed_ms(started))
+    await _claim(store, session_id)
+    try:
+        # Re-read under the claim: a decision that raced this one may have finished in between.
+        found = await store.get_message(message_id)
+        if found is None or found[1].status != "awaiting_approval":
+            raise NotAwaitingApprovalError("This message is not waiting for an email approval.")
+        started = time.perf_counter()
+        try:
+            result = await orchestrator.resume_email(session_id, message_id, decision)
+        except Exception:
+            logger.exception("Orchestrator crashed resuming message %s", message_id)
+            result = None
+        latency = (message.latency_ms or 0) + _elapsed_ms(started)  # time before the pause + after it
+        assistant_message = await save_result(store, message_id, result, latency)
+    finally:
+        session = await store.release_session(session_id)
+
+    if session is None or assistant_message is None:
+        raise SessionNotFoundError(f"Chat {session_id} was deleted while answering.")
+    return ApprovalResponse(session=session, assistant_message=assistant_message)
+
+
+async def save_result(
+    store: ChatStore, message_id: int, result: OrchestratorResult | None, latency_ms: int
+) -> Message | None:
+    """Fill the answer slot according to the result's status. None if the message vanished (chat deleted).
+
+    completed          -> 'complete', the answer as content, the result as payload
+    awaiting_approval  -> 'awaiting_approval', "I drafted an email ..." as content (the UI shows the draft)
+    failed / crashed   -> 'error', a readable text
+    """
+    if result is None or result.status == "failed":
+        text = result.answer if result is not None else AGENT_FAILED_TEXT
+        return await store.fail_message(message_id, text, latency_ms)
+    payload = orchestrator_payload(result)
+    if result.status == "awaiting_approval":
+        return await store.mark_awaiting_approval(message_id, result.answer, payload, latency_ms)
+    return await store.complete_message(message_id, result.answer, payload, latency_ms)
+
+
+def orchestrator_payload(result: OrchestratorResult) -> dict[str, Any]:
+    """What is saved with an answer: who answered, the route summary, and the full result (minus the answer).
+
+    "route" keeps the shape the UI's flow panel already reads ({router, agent, reason}): "router": "llm"
+    shows as "Orchestrator", "agent" lists the agents used in order (e.g. "db → email"), and "reason"
+    is the first reasoning line. The answer itself is the message content, so it isn't stored twice.
+    """
+    agents = [call.agent for call in result.calls if call.status != "refused" and call.agent]
+    route = {
+        "router": "llm",
+        "agent": " → ".join(agents) or "none",
+        "reason": result.reasoning[0] if result.reasoning else "",
+    }
+    return {
+        "agent": "orchestrator",
+        "route": route,
+        "result": result.model_dump(mode="json", exclude={"question", "answer"}),
+    }
+
+
+async def _claim(store: ChatStore, session_id: UUID) -> None:
+    """Mark the chat busy, or raise: SessionNotFoundError if it doesn't exist, SessionBusyError if it's busy."""
+    if await store.claim_session(session_id) is None:
+        if await store.get_session(session_id) is None:
+            raise SessionNotFoundError(f"Chat {session_id} does not exist.")
+        raise SessionBusyError("A reply is still being generated in this chat.")
 
 
 def _elapsed_ms(started: float) -> int:
