@@ -231,10 +231,8 @@ Multi-agent/   (repo root)
 │   │   │   ├── main.py             # FastAPI entrypoint, SSE streaming, endpoints
 │   │   │   ├── config.py
 │   │   │   ├── llm.py              # Groq client setup, retries
-│   │   │   ├── graph/
-│   │   │   │   ├── state.py        # Typed state definitions
-│   │   │   │   ├── supervisor.py   # Routing prompt & logic
-│   │   │   │   └── graph.py        # Graph assembly, checkpointer, compile
+│   │   │   ├── orchestrator/       # ReAct supervisor (plannings/03): models, tools, guards, prompts,
+│   │   │   │                       #   graph (Orchestrator class), checkpoint (Postgres checkpointer)
 │   │   │   ├── agents/
 │   │   │   │   ├── db/             # schema, safety, database, prompts, models, graph
 │   │   │   │   ├── doc/            # Docling parsing, chunking, embeddings, hybrid retrieval, graph

@@ -65,6 +65,19 @@ class Settings(BaseSettings):
     rag_max_pictures_per_doc: int = 20  # vision calls are slow on Groq's free tier (~4 per minute)
     rag_min_picture_area: float = 0.02  # skip pictures smaller than 2% of their page
 
+    # --- Orchestrator (ReAct supervisor), plan 03 sections 2 and 14 ---
+    # The LLM that decides which agent (tool) to call next. Must support tool calling on Groq.
+    groq_orchestrator_model: str = "openai/gpt-oss-20b"
+    orch_max_tool_calls: int = 4  # tool calls EXECUTED per question (S1)
+    orch_max_calls_per_tool: int = 2  # per ask_*/search_web tool; draft_email is always max 1 (S2)
+    orch_max_supervisor_calls: int = 6  # LLM calls in the loop per question (S3)
+    orch_turn_timeout_seconds: float = 120.0  # the whole question, all agents included (S5)
+    orch_tool_timeout_seconds: float = 60.0  # one agent call (S6)
+    orch_tool_result_chars: int = 2000  # cap on the text a tool result sends back to the supervisor
+    orch_max_email_recipients: int = 5  # S12
+    orch_supervisor_max_tokens: int = 1200  # S20: Groq limits output tokens per minute
+    dummy_agent_delay_seconds: float = 0.0  # e.g. 1.0 to watch the dummy web/email agents "work"
+
     @field_validator("data_dir")
     @classmethod
     def _resolve_data_dir(cls, value: Path) -> Path:

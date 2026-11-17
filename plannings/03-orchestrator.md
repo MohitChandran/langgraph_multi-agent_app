@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Final plan, 2026-11-17. Not started. |
+| **Status** | Final plan, 2026-11-17. O0 + O1 done 2026-11-17 (dev session; notes in Section 20). |
 | **Written in** | a planning session. (Exception: at the user's request it also wrote the dummy web/email agents: `app/agents/web/dummy.py`, `app/agents/email/dummy.py`, `tests/test_dummy_agents.py`, not committed yet.) |
 | **Implement in** | a development session, stage by stage (Section 15). |
 | **Project plan** | `project_plan.txt` **Phase 2 (Orchestrator)** + the approval part of **Phase 6 (HITL)**, using dummy web/email agents until Phases 4–5 build the real ones. |
@@ -482,12 +482,12 @@ DUMMY_AGENT_DELAY_SECONDS=0                    # e.g. 1.0 to watch sequential vs
 
 Rough effort: O0 ½ day · O1 1 · O2 1½ · O3 1 · O4 1 · O5 1½ · O6 1 day.
 
-### [ ] O0 — Housekeeping
+### [x] O0 — Housekeeping  (done 2026-11-17)
 - Commit the pending work (RAG R6–R8 if not yet, the dummy agents + their tests, and the `project_plan.txt` tree update).
 - `uv add langgraph-checkpoint-postgres`. Add the settings (Section 14). Delete the empty `app/graph/` stubs.
 **Acceptance:** `uv run pytest` is green; `from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver` imports.
 
-### [ ] O1 — Tools, guards, models
+### [x] O1 — Tools, guards, models  (done 2026-11-17, not committed)
 `orchestrator/models.py`, `tools.py` (schemas, `AgentTools`, `summarize_for_llm`, relabelling), `guards.py` (S1, S2, S7–S12 as
 pure functions + `extract_user_emails`).
 **Acceptance:** unit tests for every guard and both summarizers pass. A CLI or test shows `summarize_for_llm` output for one
@@ -606,3 +606,33 @@ small fakes for db/doc (like `test_db_agent.py`).
 - More than one email per turn; approval expiry/reminders; multi-user approvals.
 - Parallel branches as separate graph nodes (`Send`): only `asyncio.gather` inside `tools` if a message ever has several calls.
 - A plan-and-execute mode or the prebuilt `create_react_agent`.
+
+---
+
+## 20. Implementation notes from the development session
+
+**O0 (2026-11-17).** Plan 03 + the dummy agents committed (0908115). `langgraph-checkpoint-postgres` resolved to **3.2.1**
+(not 3.2.0); `AsyncPostgresSaver(conn)`, `setup()`, `adelete_thread()` and `interrupt(value, *, response_schema=)` checked
+on the installed versions. Settings in `config.py` + `.env.example` (Section 14). `app/graph/` deleted; the repo tree in
+`project_plan.txt` now shows `orchestrator/`.
+
+**O1 (2026-11-17).** `app/orchestrator/{__init__,models,tools,guards}.py`; 26 tests (`test_orchestrator_guards.py`,
+`test_orchestrator_tools.py`); 200 tests in total. Deviations from the plan, all small:
+1. **`Limits`** (a frozen dataclass in `models.py`, `Limits.from_settings()`) carries the Section 6 numbers, so the guards
+   stay pure and tests can use tiny limits.
+2. **`AgentTools.available(session_id)` returns `(tools, filenames)`**: the filenames are needed for the `ask_documents`
+   description. The state gets a `document_names` key for that.
+3. **`AgentTools.run(requests, ctx)` takes a list** of `ToolRequest(call_id, name, validated_args)`, runs them concurrently
+   and summarizes them **in call order**, so two doc calls in one message can't get the same `[D1]`. It, `draft_email()`
+   and `resolve_email()` return a `ToolOutcome(call, text, pending)` instead of tuples (`text=None` only while a draft
+   waits for approval).
+4. **The state gets `history: list[dict]`** (the `ConversationTurn`s as plain dicts) next to `history_text`: the agents
+   still receive the history after a resume, and it stays checkpoint-safe JSON.
+5. **DB summary:** the answer gets at most half of `ORCH_TOOL_RESULT_CHARS`, then **whole rows** are added while they fit
+   (max 10). Found with a real 100-row result: a long answer pushed the plain 2,000-char cut into the middle of the rows
+   JSON, which is exactly the data the supervisor copies into emails. `cap()` stays as the final safety net.
+6. **`next_labels(calls)`** uses the highest label issued (not a count), so a gap can never reuse a label.
+7. **S12:** address syntax lives in `DraftEmailArgs` (S8); the recipient COUNT is checked in `guards` because it's a setting.
+8. **S10 with two `draft_email` calls in one message:** both are refused ("call it alone"); the LLM retries with one.
+9. **`AgentCall.status="ok"`** means the agent ran, even if it couldn't answer (`result.success=false`); exceptions and
+   timeouts are `"error"`. The D9 passthrough (O2) will require `ok` **and** `result.success`.
