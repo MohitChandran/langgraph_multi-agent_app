@@ -237,8 +237,9 @@ Multi-agent/   (repo root)
 │   │   │   │   └── graph.py        # Graph assembly, checkpointer, compile
 │   │   │   ├── agents/
 │   │   │   │   ├── db/             # schema, safety, database, prompts, models, graph
-│   │   │   │   ├── doc_agent.py    # Parsing, chunking, hybrid retrieval
-│   │   │   │   └── search_agent.py # MCP client (DuckDuckGo)
+│   │   │   │   ├── doc/            # Docling parsing, chunking, embeddings, hybrid retrieval, graph
+│   │   │   │   ├── web/            # web search agent (dummy now; MCP/DuckDuckGo in Phase 4)
+│   │   │   │   └── email/          # dummy email agent (the real one is the separate email-a2a-service)
 │   │   │   └── clients/
 │   │   │       └── a2a_client.py   # A2A discovery & task lifecycle
 │   │   ├── tests/
