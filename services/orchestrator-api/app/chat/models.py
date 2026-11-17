@@ -5,6 +5,8 @@ Two kinds:
     They're built straight from database rows, so their fields match the table columns.
   - request models (ChatRequest, RenameRequest): what the API accepts. FastAPI validates
     them and answers 422 with a clear message if a field is missing or too long.
+    (The email-approval body is the orchestrator's own EmailDecision, so the API and the paused
+    graph validate the decision with the very same rules, S14.)
 """
 
 from datetime import datetime
@@ -31,7 +33,8 @@ class Message(BaseModel):
     id: int
     role: Literal["user", "assistant"]
     content: str = Field(description="The question, or the final answer as markdown.")
-    status: Literal["pending", "complete", "error"]
+    # awaiting_approval: the answer waits for the user to approve or reject an email draft (plan 03).
+    status: Literal["pending", "complete", "error", "awaiting_approval"]
     payload: dict[str, Any] = Field(description='Assistant extras, e.g. {"agent": "db", "result": {...}}.')
     latency_ms: int | None
     created_at: datetime
@@ -49,6 +52,13 @@ class ChatResponse(BaseModel):
 
     session: Session
     user_message: Message
+    assistant_message: Message
+
+
+class ApprovalResponse(BaseModel):
+    """Result of POST /api/messages/{id}/email-approval: the chat and the answer, now final."""
+
+    session: Session
     assistant_message: Message
 
 

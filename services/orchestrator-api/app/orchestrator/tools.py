@@ -67,7 +67,15 @@ class DraftEmailArgs(BaseModel):
 
     to: list[str] = Field(min_length=1, description="Recipient email addresses, exactly as the user wrote them.")
     subject: str = Field(min_length=1, max_length=150)
-    content: str = Field(min_length=1, max_length=5000, description="The information the email must contain.")
+    # Found with gpt-oss-20b on Groq: when it put a markdown TABLE in `content`, it sometimes broke the
+    # tool call's JSON (closed it before `subject`/`to`), and Groq rejected the call with a 400. Plain
+    # lines are safer, and the email agent writes the greeting and sign-off around them anyway.
+    content: str = Field(
+        min_length=1,
+        max_length=5000,
+        description="The facts the email must contain, as plain text: one fact per line or a simple '-' list. "
+        "No tables, no greeting or signature (the email agent writes those).",
+    )
 
     @field_validator("to")
     @classmethod
@@ -426,10 +434,15 @@ class AgentTools:
                 return ToolOutcome(call, f"Approved by the user and sent to {', '.join(result.draft.to)}.")
             if result.status == "rejected" and result.success:
                 call.status = "rejected"
-                return ToolOutcome(call, "The user REJECTED the draft. Nothing was sent. Do not draft another email.")
+                rejected = "The user REJECTED the draft. Nothing was sent. Do not draft another email. Tell the user."
+                return ToolOutcome(call, rejected)
             error = result.error or result.answer
         call.status, call.error = "error", error
-        return ToolOutcome(call, f"The email could not be sent: {error}")
+        # Found in a real run: "The email could not be sent: ..." alone was ignored once, and the supervisor
+        # offered to send the draft. Said as plainly as the rejection, with what to tell the user.
+        return ToolOutcome(
+            call, f"NOT SENT: the email could not be sent ({error}). Tell the user it was not sent; they can ask again."
+        )
 
 
 def short_error(error: BaseException) -> str:

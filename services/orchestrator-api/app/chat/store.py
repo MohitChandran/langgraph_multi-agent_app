@@ -55,13 +55,32 @@ SCHEMA_STATEMENTS = (
         session_id  UUID NOT NULL REFERENCES app.chat_sessions(id) ON DELETE CASCADE,
         role        TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
         content     TEXT NOT NULL DEFAULT '',
-        status      TEXT NOT NULL DEFAULT 'complete' CHECK (status IN ('pending', 'complete', 'error')),
+        status      TEXT NOT NULL DEFAULT 'complete'
+                    CONSTRAINT chat_messages_status_check
+                    CHECK (status IN ('pending', 'complete', 'error', 'awaiting_approval')),
         payload     JSONB NOT NULL DEFAULT '{}',
         latency_ms  INTEGER,
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     )
     """,
     "COMMENT ON COLUMN app.chat_messages.content IS 'The question, or the final answer (markdown).'",
+    # Plan 03 (orchestrator): an answer can wait for the user to approve an email ('awaiting_approval').
+    # Tables created before that have the old 3-status check: replace it, but only if it lacks the new
+    # status, so this is a no-op on every later startup (no lock, no re-check of the whole table).
+    """
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conrelid = 'app.chat_messages'::regclass AND conname = 'chat_messages_status_check'
+              AND pg_get_constraintdef(oid) LIKE '%awaiting_approval%'
+        ) THEN
+            ALTER TABLE app.chat_messages DROP CONSTRAINT IF EXISTS chat_messages_status_check;
+            ALTER TABLE app.chat_messages ADD CONSTRAINT chat_messages_status_check
+                CHECK (status IN ('pending', 'complete', 'error', 'awaiting_approval'));
+        END IF;
+    END $$
+    """,
     "COMMENT ON COLUMN app.chat_messages.payload IS 'Assistant extras: agent name and its result (SQL, rows, steps).'",
     # Opening a chat and loading memory both read "messages of ONE session, by id": this index serves both.
     "CREATE INDEX IF NOT EXISTS chat_messages_session_idx ON app.chat_messages (session_id, id)",
@@ -278,6 +297,45 @@ class ChatStore:
         )
         return Message(**row) if row else None
 
+    async def mark_awaiting_approval(
+        self, message_id: int, content: str, payload: dict[str, Any], latency_ms: int
+    ) -> Message | None:
+        """Save an answer that waits for the user to approve an email draft (plan 03, 11.3).
+
+        Like complete_message, but the status is 'awaiting_approval': the chat stays open for the
+        decision, a new message is refused until then (S15), and memory skips it (not 'complete').
+        """
+        row = await self.fetch_one(
+            f"UPDATE app.chat_messages SET content = %s, payload = %s, latency_ms = %s, status = 'awaiting_approval'"
+            f" WHERE id = %s RETURNING {MESSAGE_COLUMNS}",
+            (content, Jsonb(payload), latency_ms, message_id),
+        )
+        return Message(**row) if row else None
+
+    async def get_message(self, message_id: int) -> tuple[UUID, Message] | None:
+        """One message and the chat it belongs to, or None. The approval endpoint only gets a message id."""
+        row = await self.fetch_one(
+            f"SELECT session_id, {MESSAGE_COLUMNS} FROM app.chat_messages WHERE id = %s", (message_id,)
+        )
+        if row is None:
+            return None
+        session_id = row.pop("session_id")
+        return session_id, Message(**row)
+
+    async def has_awaiting_approval(self, session_id: UUID) -> bool:
+        """True if an answer in this chat is waiting for an email decision (then no new message, S15)."""
+        row = await self.fetch_one(
+            "SELECT EXISTS (SELECT 1 FROM app.chat_messages WHERE session_id = %s AND status = 'awaiting_approval')"
+            " AS waiting",
+            (session_id,),
+        )
+        return bool(row and row["waiting"])
+
+    async def awaiting_approval_message_ids(self) -> set[int]:
+        """Ids of every answer waiting for an email decision: their checkpoint threads must be kept."""
+        rows = await self._fetch_all("SELECT id FROM app.chat_messages WHERE status = 'awaiting_approval'")
+        return {row["id"] for row in rows}
+
     async def list_messages(self, session_id: UUID, limit: int = 100, before: int | None = None) -> MessagePage:
         """Return up to `limit` messages, oldest to newest. With `before`, only messages older than that id.
 
@@ -302,12 +360,18 @@ class ChatStore:
         """The newest `limit` COMPLETE messages of a session, newest first: the raw material for memory.
 
         Returns only what memory needs (role, content, which agent, its SQL or its citations), never rows.
-        Failed or pending answers are excluded so they don't pollute the agent's memory.
+        Orchestrator answers keep that per agent call, so `calls` lists each call's agent, status, SQL,
+        citations and web sources (still without rows). NULL for answers of a single agent.
+        Failed, pending and awaiting_approval answers are excluded so they don't pollute the agent's memory.
         """
         return await self._fetch_all(
             """
             SELECT role, content, payload->>'agent' AS agent, payload->'result'->>'sql' AS sql,
-                   payload->'result'->'citations' AS citations
+                   payload->'result'->'citations' AS citations,
+                   (SELECT jsonb_agg(jsonb_build_object(
+                               'agent', c->>'agent', 'status', c->>'status', 'sql', c->'result'->>'sql',
+                               'citations', c->'result'->'citations', 'sources', c->'result'->'sources'))
+                    FROM jsonb_array_elements(payload->'result'->'calls') AS c) AS calls
             FROM app.chat_messages
             WHERE session_id = %s AND status = 'complete'
             ORDER BY id DESC

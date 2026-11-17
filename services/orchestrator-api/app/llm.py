@@ -18,7 +18,7 @@ from pydantic import ValidationError
 
 from app.config import get_settings
 
-ModelTier = Literal["strong", "fast", "vision"]
+ModelTier = Literal["strong", "fast", "vision", "orchestrator"]
 
 # Errors from an LLM call worth handling (retry or a polite failure): API errors that remain after the
 # Groq client's own retries, and structured-output replies that don't parse into the expected model.
@@ -31,7 +31,8 @@ def get_llm(tier: ModelTier = "strong", temperature: float = 0.0, max_tokens: in
     Args:
         tier: "strong" for reasoning-heavy steps (routing, SQL generation),
               "fast" for cheap high-volume steps (summaries, query rewrites),
-              "vision" for describing images (GROQ_VISION_MODEL; must accept image input).
+              "vision" for describing images (GROQ_VISION_MODEL; must accept image input),
+              "orchestrator" for the supervisor that picks agents (GROQ_ORCHESTRATOR_MODEL; must do tool calling).
         temperature: 0.0 = deterministic output, which we want for routing and SQL.
         max_tokens: cap on the reply length. Groq's free tier limits OUTPUT tokens per
             minute per model (e.g. 1,000 for some models) and rejects a request outright
@@ -50,6 +51,7 @@ def get_llm(tier: ModelTier = "strong", temperature: float = 0.0, max_tokens: in
         "strong": settings.groq_strong_model,
         "fast": settings.groq_fast_model,
         "vision": settings.groq_vision_model,
+        "orchestrator": settings.groq_orchestrator_model,
     }
     model = models[tier]
     return ChatGroq(

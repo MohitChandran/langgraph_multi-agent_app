@@ -15,6 +15,7 @@ from app.agents.db.database import ReadOnlyDatabase
 from app.agents.doc.store import DocumentStore
 from app.chat.store import ChatStore
 from app.config import Settings, get_settings
+from app.orchestrator.checkpoint import CheckpointStore
 
 
 def settings_or_skip() -> Settings:
@@ -25,7 +26,7 @@ def settings_or_skip() -> Settings:
         pytest.skip(f"Settings not available: {type(error).__name__}")
 
 
-async def open_or_skip(resource: ReadOnlyDatabase | ChatStore | DocumentStore) -> None:
+async def open_or_skip(resource: ReadOnlyDatabase | ChatStore | DocumentStore | CheckpointStore) -> None:
     """Open a connection pool, or skip the test if Postgres can't be reached."""
     try:
         await resource.open()
@@ -83,3 +84,15 @@ async def test_session(chat_store: ChatStore) -> AsyncIterator:
         yield session.id
     finally:
         await chat_store.delete_session(session.id)
+
+
+@pytest.fixture
+async def checkpoint_store() -> AsyncIterator[CheckpointStore]:
+    """An open CheckpointStore (user app_rw, the orchestrator's Postgres checkpointer) with its tables set up."""
+    store = CheckpointStore(settings_or_skip().app_database_url)
+    await open_or_skip(store)
+    try:
+        await store.setup()
+        yield store
+    finally:
+        await store.close()

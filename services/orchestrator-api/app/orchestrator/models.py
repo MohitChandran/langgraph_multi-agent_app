@@ -12,6 +12,7 @@ Two kinds of objects live here:
   way out (`budget.model_dump()`).
 """
 
+import operator
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, TypedDict
 
@@ -114,8 +115,11 @@ class OrchestratorState(TypedDict, total=False):
     pending_email: dict[str, Any] | None  # PendingEmail.model_dump(mode="json")
     email_decision: dict[str, Any] | None  # EmailDecision.model_dump()
     final_answer: str
+    passthrough: bool  # final_answer is the single agent's own answer, unchanged (D9)
     stop_reason: StopReason
-    steps: list[str]  # node names in the order they ran (UI flow, tests)
+    # node names in the order they ran (UI flow, tests). operator.add = each node returns only ITS name
+    # (["tools"]) and LangGraph appends it, instead of every node copying the whole list.
+    steps: Annotated[list[str], operator.add]
 
 
 class OrchestratorResult(BaseModel):
@@ -131,4 +135,7 @@ class OrchestratorResult(BaseModel):
     steps: list[str] = Field(default_factory=list)
     reasoning: list[str] = Field(default_factory=list)  # built by code from the calls, e.g. "Asked the database: ..."
     budget: dict[str, int] = Field(default_factory=dict)  # {"tool_calls": 2, "supervisor_calls": 3}
+    # True when `answer` is the single agent's own answer, unchanged (plan D9): its citations are then
+    # that agent's own [1], [2]... instead of [D1]/[W1] labels.
+    passthrough: bool = False
     error: str | None = None

@@ -248,4 +248,4 @@ async def test_deciding_a_draft_that_no_longer_exists_is_an_error() -> None:
     tools.email_agent = DummyEmailAgent()  # a fresh agent = the API restarted
 
     outcome = await tools.resolve_email(drafted.pending, EmailDecision(approved=True))
-    assert outcome.call.status == "error" and outcome.text.startswith("The email could not be sent: Unknown")
+    assert outcome.call.status == "error" and outcome.text.startswith("NOT SENT: the email could not be sent (Unknown")

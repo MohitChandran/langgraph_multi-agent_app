@@ -70,3 +70,45 @@ async def test_fail_stale_pending_only_touches_old_pending_replies(chat_store: C
         assert (await chat_store.fetch_one(read, (fresh["id"],)))["status"] == "pending"
     finally:
         await chat_store.fetch_one("DELETE FROM app.chat_sessions WHERE id = %s RETURNING id", (session["id"],))
+
+
+# ------------------------------------------------------------------ email approval (plan 03, 11.3)
+
+
+@pytest.mark.integration
+async def test_awaiting_approval_status_and_its_queries(chat_store: ChatStore) -> None:
+    """The migrated constraint accepts 'awaiting_approval' (setup stays idempotent), and the queries find it."""
+    await chat_store.setup()  # the constraint migration is a no-op the second time
+    session = await chat_store.create_session("[pytest] awaiting approval")
+    try:
+        _, answer = await chat_store.add_turn(session.id, "Email the list to accounts@company.example")
+        assert not await chat_store.has_awaiting_approval(session.id)
+
+        waiting = await chat_store.mark_awaiting_approval(answer.id, "I drafted an email.", {"agent": "x"}, 12)
+        assert waiting.status == "awaiting_approval" and waiting.content == "I drafted an email."
+        assert await chat_store.has_awaiting_approval(session.id)
+        assert answer.id in await chat_store.awaiting_approval_message_ids()
+        assert await chat_store.get_message(answer.id) == (session.id, waiting)
+        assert await chat_store.get_message(-1) is None
+
+        with pytest.raises(psycopg.errors.CheckViolation):  # other statuses are still refused
+            await chat_store.fetch_one("UPDATE app.chat_messages SET status = 'paused' WHERE id = %s", (answer.id,))
+    finally:
+        await chat_store.delete_session(session.id)
+
+
+@pytest.mark.integration
+async def test_fail_stale_pending_never_touches_answers_awaiting_approval(chat_store: ChatStore) -> None:
+    """An answer waiting hours for an email decision isn't 'interrupted': the user can still approve it."""
+    session = await chat_store.create_session("[pytest] stale approval")
+    try:
+        _, answer = await chat_store.add_turn(session.id, "q")
+        await chat_store.mark_awaiting_approval(answer.id, "I drafted an email.", {}, 1)
+        await chat_store.fetch_one(
+            "UPDATE app.chat_messages SET created_at = now() - interval '2 hours' WHERE id = %s RETURNING id",
+            (answer.id,),
+        )
+        await chat_store.fail_stale_pending()
+        assert (await chat_store.get_message(answer.id))[1].status == "awaiting_approval"
+    finally:
+        await chat_store.delete_session(session.id)
