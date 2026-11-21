@@ -1064,9 +1064,236 @@ button:disabled {
   color: var(--text);
 }
 
+/* ---------- orchestrator answers (plan 03): call statuses, calls panel, web links, email card ---------- */
+
+.flow-step.ok {
+  color: var(--ok);
+  background: var(--ok-bg);
+  border-color: transparent;
+}
+
+.flow-step.warn {
+  color: var(--warn);
+  background: var(--warn-bg);
+  border-color: transparent;
+}
+
+.calls {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.call {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.call-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 13px;
+}
+
+.call-toggle:hover {
+  background: var(--surface);
+}
+
+.call-toggle .chip {
+  flex-shrink: 0;
+}
+
+.call-input {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.call-time {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.call-body {
+  padding: 4px 12px 12px;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+
+.web-links {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 14px;
+}
+
+.web-links li {
+  margin: 3px 0;
+}
+
+.web-links a {
+  color: var(--accent);
+}
+
+.email-card {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  padding: 12px 14px;
+}
+
+.email-card.awaiting {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.email-card-head {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+summary.email-card-head {
+  cursor: pointer;
+}
+
+.email-card.ok .email-card-head {
+  color: var(--ok);
+}
+
+.email-card.warn .email-card-head {
+  color: var(--warn);
+}
+
+.email-to {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.email-fields {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 10px 0;
+  font-size: 14px;
+}
+
+.email-fields dt {
+  color: var(--text-muted);
+}
+
+.email-fields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.email-label {
+  display: block;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.email-edited {
+  color: var(--accent);
+}
+
+.email-body {
+  display: block;
+  width: 100%;
+  min-height: 150px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.email-body:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.email-body-text {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.email-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.action-button {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  padding: 7px 16px;
+  font-size: 14px;
+}
+
+.action-button:hover:not(:disabled) {
+  background: var(--surface);
+}
+
+.action-button.primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.action-button.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 85%, var(--text));
+}
+
+.action-button:disabled {
+  opacity: 0.55;
+}
+
+.email-note {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 /* ---------- phones ---------- */
 
 @media (max-width: 560px) {
+  .brand .badge {
+    display: none; /* the agent list doesn't fit next to the title on a phone */
+  }
+
   .suggestions {
     grid-template-columns: 1fr 1fr;
   }

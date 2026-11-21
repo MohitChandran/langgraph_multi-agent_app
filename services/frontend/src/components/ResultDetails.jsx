@@ -15,14 +15,6 @@ import { ChevronIcon } from "./icons.jsx";
  */
 export default function ResultDetails({ result, payload }) {
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
-
-  /** Copy the SQL to the clipboard (e.g. to paste into DBeaver) and briefly show "Copied". */
-  async function copySql() {
-    await navigator.clipboard.writeText(result.sql);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }
 
   return (
     <div className="details">
@@ -34,45 +26,68 @@ export default function ResultDetails({ result, payload }) {
       {open && (
         <div className="details-panel">
           <AgentFlow payload={payload} result={result} />
-          <div className="details-label">Workflow</div>
-          <ol className="steps">
-            {result.steps.map((step, index) => (
-              <li key={index} className={`step step-${step}`}>
-                {step}
-              </li>
-            ))}
-          </ol>
-
-          {result.explanation && <p className="details-explanation">{result.explanation}</p>}
-
-          {result.sql && (
-            <>
-              <div className="details-label with-action">
-                SQL
-                <button type="button" className="text-button" onClick={copySql}>
-                  {copied ? "Copied" : "Copy"}
-                </button>
-              </div>
-              <pre className="sql">
-                <code>{result.sql}</code>
-              </pre>
-            </>
-          )}
-
-          {result.error && <p className="details-error">Last error: {result.error}</p>}
-
-          {result.columns.length > 0 && (
-            <>
-              <div className="details-label">
-                Rows ({result.rows.length}
-                {result.hit_row_limit ? ", row limit reached" : ""})
-              </div>
-              <ResultTable columns={result.columns} rows={result.rows} />
-            </>
-          )}
+          <DbResultBody result={result} />
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The DB agent's work, without a toggle: workflow steps, the SQL (with a Copy button) and the rows.
+ * Used inside ResultDetails, and by the orchestrator's per-call panel for an ask_database call.
+ *
+ * @param {{result: object}} props - a DBAgentResult.
+ */
+export function DbResultBody({ result }) {
+  const [copied, setCopied] = useState(false);
+
+  /** Copy the SQL to the clipboard (e.g. to paste into DBeaver) and briefly show "Copied". */
+  async function copySql() {
+    await navigator.clipboard.writeText(result.sql);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  return (
+    <>
+      <div className="details-label">Workflow</div>
+      <ol className="steps">
+        {result.steps.map((step, index) => (
+          <li key={index} className={`step step-${step}`}>
+            {step}
+          </li>
+        ))}
+      </ol>
+
+      {result.explanation && <p className="details-explanation">{result.explanation}</p>}
+
+      {result.sql && (
+        <>
+          <div className="details-label with-action">
+            SQL
+            <button type="button" className="text-button" onClick={copySql}>
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <pre className="sql">
+            <code>{result.sql}</code>
+          </pre>
+        </>
+      )}
+
+      {result.error && <p className="details-error">Last error: {result.error}</p>}
+
+      {result.columns.length > 0 && (
+        <>
+          <div className="details-label">
+            Rows ({result.rows.length}
+            {result.hit_row_limit ? ", row limit reached" : ""})
+          </div>
+          <ResultTable columns={result.columns} rows={result.rows} />
+        </>
+      )}
+    </>
   );
 }
 

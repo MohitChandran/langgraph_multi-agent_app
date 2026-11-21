@@ -111,7 +111,7 @@ export default function App() {
             <MenuIcon />
           </button>
           <div className="brand">
-            Ops Assistant <span className="badge">Database + documents</span>
+            Ops Assistant <span className="badge">Database · documents · web · email</span>
           </div>
         </header>
         <Routes>

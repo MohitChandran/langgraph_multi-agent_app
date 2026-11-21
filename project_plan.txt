@@ -2,10 +2,10 @@ ENTERPRISE MULTI-AGENT OPS PLATFORM — PROJECT PLAN
 Last updated: 2026-11-18
 Status: Phase 1 (DB agent) and Phase 3 (Doc QA RAG agent) built and working; their evals are still to do.
         Chat sessions + memory (plannings/01) and most of the chat UI are built early.
-        Phase 2 orchestrator (plannings/03-orchestrator.md) O0-O4 built: a ReAct supervisor answers every chat
-        message through the DB, Doc and (dummy) web/email agents, with code-enforced limits and email approval
-        that survives a restart. Next: O5 (UI: calls panel + approval card), O6 (orchestration eval), then the
-        R9 / SQL evals.
+        Phase 2 orchestrator (plannings/03-orchestrator.md) O0-O5 built: a ReAct supervisor answers every chat
+        message through the DB, Doc and (dummy) web/email agents, with code-enforced limits, email approval that
+        survives a restart, and a UI with per-call chips/details and an approval card. Next: O6 (orchestration
+        eval + safety cases), then the R9 / SQL evals, then the real web (MCP) and email (A2A) agents.
 
 ══════════════════════════════════════════════════════════════════════════════════════════════
 0. DECISION LOG
@@ -294,7 +294,8 @@ Rule: Claude writes the code and explains every file/function; interview prep ha
           (dummy web/email for now), no streaming yet, Langfuse at the very end.
     Steps: [x] O0-O4 (2026-11-17/18): agents as tools, safety guards in code, the ReAct graph, email approval
                with the Postgres checkpointer, /api/chat through the orchestrator + approval endpoint
-           [ ] O5 frontend (calls panel, approval card)  [ ] O6 orchestration eval + safety cases
+           [x] O5 (2026-11-18): agent-call chips, sources, per-call details, email approval card, composer lock
+           [ ] O6 orchestration eval + safety cases   [ ] Langfuse tracing (decided: at the very end)
     Learn: StateGraph, typed state, conditional edges, checkpointing, streaming, tracing.
 
 [ ] Phase 3 — Doc QA Agent

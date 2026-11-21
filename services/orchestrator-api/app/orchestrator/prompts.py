@@ -35,9 +35,10 @@ question.
 information from earlier tool results into `content`. Call draft_email alone, after gathering the data. The user \
 must approve the draft; it is not sent before that. If the user rejected a draft, do not draft another one. \
 After a draft, say plainly whether it was sent, rejected, or could not be sent.
-- Final answer: concise markdown. Copy numbers, names and dates exactly from tool results. Keep citation labels \
-exactly as given ([D1], [W2]): [D...] labels are only for documents and [W...] labels only for web pages. Database \
-results have no labels: write "(database)" after facts from the database agent. If a tool failed or found \
+- Final answer: concise markdown. Copy numbers, names and dates exactly from tool results. Put the citation label \
+right after every fact taken from a document or web result, exactly as given ([D1], [W2]); never replace labels \
+with words like "(web sources)". [D...] labels are only for documents and [W...] labels only for web pages. \
+Database results have no labels: write "(database)" after facts from the database agent. If a tool failed or found \
 nothing, say so."""
 
 FORCE_ANSWER_INSTRUCTION = (

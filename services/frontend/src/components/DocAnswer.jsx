@@ -82,30 +82,41 @@ export default function DocAnswer({ message }) {
 function Sources({ citations, messageId, highlighted }) {
   return (
     <ol className="sources">
-      {citations.map((c) => {
-        const pages = c.page_end !== c.page_start ? `pp. ${c.page_start}–${c.page_end}` : `p. ${c.page_start}`;
-        return (
-          <li key={c.n} id={`src-${messageId}-${c.n}`} className={highlighted === c.n ? "source flash" : "source"}>
-            <span className="cite static">{c.n}</span>
-            <div className="source-body">
-              <div className="source-head">
-                <span className="source-file">{c.filename}</span>
-                <span className="source-meta">
-                  {pages}
-                  {c.heading_path && ` · ${c.heading_path}`}
-                  {c.chunk_type !== "text" && ` · ${c.chunk_type}`}
-                </span>
-                <a className="source-open" href={`/api/documents/${c.document_id}/file#page=${c.page_start}`} target="_blank" rel="noreferrer">
-                  Open {pages} <ExternalLinkIcon />
-                </a>
-              </div>
-              <div className="source-snippet">{c.snippet}</div>
-            </div>
-            {c.picture_url && <img className="source-thumb" src={c.picture_url} alt={`Figure on page ${c.page_start}`} loading="lazy" />}
-          </li>
-        );
-      })}
+      {citations.map((c) => (
+        <SourceItem key={c.n} citation={c} label={c.n} id={`src-${messageId}-${c.n}`} highlighted={highlighted === c.n} />
+      ))}
     </ol>
+  );
+}
+
+/**
+ * One cited document passage: its badge, file, pages, section, a snippet, a thumbnail for figures,
+ * and "Open" at the page. Also used by the orchestrator's sources list, with labels like "D1".
+ *
+ * @param {{citation: object, label: number|string, id: string, highlighted: boolean}} props
+ *   label = the text of the badge; id = the element id a badge in the answer scrolls to.
+ */
+export function SourceItem({ citation: c, label, id, highlighted }) {
+  const pages = c.page_end !== c.page_start ? `pp. ${c.page_start}–${c.page_end}` : `p. ${c.page_start}`;
+  return (
+    <li id={id} className={highlighted ? "source flash" : "source"}>
+      <span className="cite static">{label}</span>
+      <div className="source-body">
+        <div className="source-head">
+          <span className="source-file">{c.filename}</span>
+          <span className="source-meta">
+            {pages}
+            {c.heading_path && ` · ${c.heading_path}`}
+            {c.chunk_type !== "text" && ` · ${c.chunk_type}`}
+          </span>
+          <a className="source-open" href={`/api/documents/${c.document_id}/file#page=${c.page_start}`} target="_blank" rel="noreferrer">
+            Open {pages} <ExternalLinkIcon />
+          </a>
+        </div>
+        <div className="source-snippet">{c.snippet}</div>
+      </div>
+      {c.picture_url && <img className="source-thumb" src={c.picture_url} alt={`Figure on page ${c.page_start}`} loading="lazy" />}
+    </li>
   );
 }
 
@@ -127,53 +138,67 @@ function RetrievalDetails({ result, payload }) {
       {open && (
         <div className="details-panel">
           <AgentFlow payload={payload} result={result} />
-          <div className="details-label">Workflow</div>
-          <ol className="steps">
-            {result.steps.map((step, index) => (
-              <li key={index} className="step">
-                {step}
-              </li>
-            ))}
-          </ol>
-          <div className="details-label">Search query</div>
-          <p className="details-explanation">{result.standalone_query}</p>
-          {result.retrieval.length > 0 && (
-            <>
-              <div className="details-label">Candidates ({result.retrieval.length})</div>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Chunk</th>
-                      <th>Type</th>
-                      <th>Page</th>
-                      <th>Dense rank</th>
-                      <th>Keyword rank</th>
-                      <th>RRF score</th>
-                      <th>Rerank score</th>
-                      <th>Used</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.retrieval.map((row) => (
-                      <tr key={row.chunk_id} className={row.used ? "used" : undefined}>
-                        <td className="num">#{row.chunk_id}</td>
-                        <td>{row.chunk_type}</td>
-                        <td className="num">{row.page_start}</td>
-                        <td className="num">{row.dense_rank ?? "—"}</td>
-                        <td className="num">{row.keyword_rank ?? "—"}</td>
-                        <td className="num">{row.rrf_score.toFixed(4)}</td>
-                        <td className="num">{row.rerank_score != null ? row.rerank_score.toFixed(2) : "—"}</td>
-                        <td>{row.used ? "✓" : ""}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
+          <RetrievalBody result={result} />
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The Doc agent's retrieval, without a toggle: workflow steps, the search query, and how every
+ * candidate chunk ranked. Used inside RetrievalDetails, and by the orchestrator's per-call panel.
+ *
+ * @param {{result: object}} props - a DocAgentResult.
+ */
+export function RetrievalBody({ result }) {
+  return (
+    <>
+      <div className="details-label">Workflow</div>
+      <ol className="steps">
+        {result.steps.map((step, index) => (
+          <li key={index} className="step">
+            {step}
+          </li>
+        ))}
+      </ol>
+      <div className="details-label">Search query</div>
+      <p className="details-explanation">{result.standalone_query}</p>
+      {result.retrieval.length > 0 && (
+        <>
+          <div className="details-label">Candidates ({result.retrieval.length})</div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Chunk</th>
+                  <th>Type</th>
+                  <th>Page</th>
+                  <th>Dense rank</th>
+                  <th>Keyword rank</th>
+                  <th>RRF score</th>
+                  <th>Rerank score</th>
+                  <th>Used</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.retrieval.map((row) => (
+                  <tr key={row.chunk_id} className={row.used ? "used" : undefined}>
+                    <td className="num">#{row.chunk_id}</td>
+                    <td>{row.chunk_type}</td>
+                    <td className="num">{row.page_start}</td>
+                    <td className="num">{row.dense_rank ?? "—"}</td>
+                    <td className="num">{row.keyword_rank ?? "—"}</td>
+                    <td className="num">{row.rrf_score.toFixed(4)}</td>
+                    <td className="num">{row.rerank_score != null ? row.rerank_score.toFixed(2) : "—"}</td>
+                    <td>{row.used ? "✓" : ""}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </>
   );
 }

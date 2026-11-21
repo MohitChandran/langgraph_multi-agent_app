@@ -1,18 +1,18 @@
 /**
  * Empty-state screen shown before the first question: a greeting and example questions,
- * about the database or, once documents are attached, about the documents. The database
- * examples double as a quick smoke test of the DB agent: each one exercises a different
- * skill (date filters, joins, currencies, aggregation).
+ * about the data or, once documents are attached, about the documents. The examples double
+ * as a quick smoke test of the orchestrator: a database question with dates, one with joins,
+ * one that drafts an email (approval card), and one that needs the database AND the web.
  */
 
 const DATABASE_SUGGESTIONS = [
   "Which pending invoices are due this week?",
   "Which contracts expire in the next 60 days, and who owns them?",
-  "What did we spend per vendor category last quarter?",
-  "Which vendors have the most open high or critical tickets?",
+  "Which vendors have overdue invoices? Email the list to accounts@company.example",
+  "How many open tickets do we have for Example Cloud, and did it change its SLA recently?",
 ];
 
-// In a chat with uploaded documents, the Doc agent answers: suggest document questions instead.
+// In a chat with uploaded documents, ask_documents becomes available: suggest document questions.
 const DOCUMENT_SUGGESTIONS = [
   "Summarize the main points of this document.",
   "What do the tables say about service levels?",
@@ -32,7 +32,7 @@ export default function Greeting({ onPick, hasDocuments = false }) {
       <p className="greeting-subtitle">
         {hasDocuments
           ? "Ask me anything about your documents. I'll cite the page."
-          : "Ask about vendors, contracts, invoices and tickets, or attach a document."}
+          : "Ask about vendors, contracts, invoices and tickets, attach a document, or ask me to email a summary."}
       </p>
       <div className="suggestions">
         {suggestions.map((question) => (

@@ -3,8 +3,10 @@
  *
  * Routes: "/" = a new, empty chat; "/c/:sessionId" = an existing chat.
  * Documents (plan 02, R8): attach with the paperclip or drag-and-drop; chips above the composer
- * show their processing status (useDocuments polls it); a chat with documents is answered by
- * the Doc agent on the server.
+ * show their processing status (useDocuments polls it). The orchestrator on the server (plan 03)
+ * decides per question whether to ask the database, these documents, the web, or draft an email.
+ * Email approval: while an answer is "awaiting_approval", the composer is locked (the server would
+ * answer 409) until you approve or reject the draft on its card; the card then swaps in the final answer.
  * The SERVER is the source of truth: messages are loaded from GET .../messages, and after
  * a send we reload them instead of patching a local copy. The browser only adds two
  * temporary "optimistic" rows (your question + a thinking row) while it waits.
@@ -197,6 +199,19 @@ export default function ChatPage({ onSessionsChanged }) {
     }
   }
 
+  /**
+   * An email draft was approved or rejected: show the returned (final) version of that message. null means
+   * "something changed elsewhere" (decided in another tab, chat deleted): reload this chat instead.
+   */
+  function handleEmailDecided(updated) {
+    onSessionsChanged();
+    if (!updated) {
+      if (sessionIdRef.current) reload(sessionIdRef.current);
+      return;
+    }
+    setMessages((previous) => previous.map((message) => (message.id === updated.id ? updated : message)));
+  }
+
   /** Prepend the previous page of messages ("Load earlier messages"). */
   async function loadEarlier() {
     const id = sessionId;
@@ -273,6 +288,9 @@ export default function ChatPage({ onSessionsChanged }) {
 
   const busy = last?.status === "pending";
   const hasDocuments = documents.length > 0;
+  const awaitingApproval = messages.some((message) => message.status === "awaiting_approval");
+  let placeholder = hasDocuments ? "Ask about your documents, data or the web" : "Ask about invoices, vendors, contracts…";
+  if (awaitingApproval) placeholder = "Approve or reject the email first";
 
   return (
     <div className="chat-page" onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
@@ -303,7 +321,8 @@ export default function ChatPage({ onSessionsChanged }) {
               <AssistantMessage
                 key={message.id}
                 message={message}
-                thinkingLabel={hasDocuments ? "Searching your documents…" : "Querying the database…"}
+                thinkingLabel="Asking the agents…"
+                onEmailDecided={handleEmailDecided}
               />
             ),
           )}
@@ -325,13 +344,12 @@ export default function ChatPage({ onSessionsChanged }) {
           onSend={send}
           onAttach={uploadFiles}
           busy={busy}
-          disabled={view === "not-found"}
-          placeholder={hasDocuments ? "Ask about your documents" : "Ask the operations database"}
+          disabled={view === "not-found" || awaitingApproval}
+          placeholder={placeholder}
         />
         <p className="disclaimer">
-          {hasDocuments
-            ? "Answers come from your documents. Check the cited sources for anything important."
-            : "Answers come from the operations database. Check the SQL for anything important."}
+          Answers come from the database, your documents and the web. Check the SQL and the cited sources for
+          anything important. Emails are only sent after you approve them.
         </p>
       </footer>
     </div>

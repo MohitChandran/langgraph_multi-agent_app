@@ -99,6 +99,20 @@ export function sendMessage({ sessionId, content }) {
 }
 
 /**
+ * Decide on the email draft of an answer that is "awaiting_approval" (plan 03): approve (optionally with
+ * an edited body) or reject. Resolves when the orchestrator has finished: the email is sent (or not)
+ * and the SAME message comes back with its final answer.
+ *
+ * @param {number} messageId - the assistant message waiting for approval.
+ * @param {{approved: boolean, edited_body?: string|null}} decision
+ * @returns {Promise<{session: object, assistant_message: object}>}
+ * @throws {ApiError} 404 (no such message), 409 (not waiting any more, or the chat is busy), 422 (invalid body)
+ */
+export function approveEmail(messageId, decision) {
+  return request(`/api/messages/${messageId}/email-approval`, { method: "POST", body: decision });
+}
+
+/**
  * Rename a chat.
  * @param {string} sessionId
  * @param {string} title

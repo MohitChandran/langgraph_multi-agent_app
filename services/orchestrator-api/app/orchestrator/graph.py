@@ -84,6 +84,8 @@ ASK_TOOLS = ("ask_database", "ask_documents", "search_web")  # the tools that an
 # [D1], [W2]: the citation labels of multi-agent answers (D10). The optional leading space is matched so a
 # dropped label doesn't leave "changed [W1] ." behind.
 LABEL_MARK = re.compile(r"\s?\[([DW]\d+)\]")
+# gpt-oss sometimes writes its own citation style, 【W1】 or 【W1†L3】 (found in a real run): turned into [W1].
+FULLWIDTH_LABEL = re.compile(r"【\s*([DW]\d+)[^】]*】")
 
 FAILED_TEXT = "Sorry, something went wrong while answering. Please try again."
 TIMEOUT_TEXT = "This took too long and was stopped."
@@ -597,6 +599,7 @@ def final_answer(calls: list[AgentCall], messages: list[AnyMessage]) -> tuple[st
        turn ("Which vendors...?") then can't be paraphrased wrongly by the supervisor.
     2. Otherwise the supervisor's (or the forced) final text, with citation labels that were never
        issued removed ([D7] when only D1-D3 exist): a label must always lead to a real source.
+       Labels written 【W1】 (gpt-oss's own style) become [W1] first, so the UI turns them into badges.
     3. No text at all (the fallback path): the agent's answer, or why it failed.
     """
     executed = [call for call in calls if call.tool in ASK_TOOLS and call.status != "refused"]
@@ -608,7 +611,8 @@ def final_answer(calls: list[AgentCall], messages: list[AnyMessage]) -> tuple[st
     last = messages[-1] if messages else None
     if isinstance(last, AIMessage) and not last.tool_calls and message_text(last).strip():
         issued = {label for call in calls for label in call.citation_labels}
-        text = LABEL_MARK.sub(lambda m: m.group(0) if m.group(1) in issued else "", message_text(last))
+        text = FULLWIDTH_LABEL.sub(r"[\1]", message_text(last))
+        text = LABEL_MARK.sub(lambda m: m.group(0) if m.group(1) in issued else "", text)
         return text.strip(), False
 
     if only and only.status == "ok" and only.result:

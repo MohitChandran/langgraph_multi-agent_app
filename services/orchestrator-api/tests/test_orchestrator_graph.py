@@ -19,12 +19,13 @@ from app.orchestrator.graph import (
     TIMEOUT_TEXT,
     TOO_MANY_STEPS_TEXT,
     Orchestrator,
+    final_answer,
     run_config,
     thread_id_for,
     unanswered_tool_calls,
 )
 from app.orchestrator.guards import BUDGET_USED_UP, DUPLICATE_CALL
-from app.orchestrator.models import EmailDecision, Limits
+from app.orchestrator.models import AgentCall, EmailDecision, Limits
 from app.orchestrator.prompts import FORCE_ANSWER_INSTRUCTION
 from tests.orchestrator_fakes import ScriptedLLM, answer, call, calls, groq_down
 from tests.test_orchestrator_tools import FakeAgent, db_result, make_tools
@@ -100,6 +101,16 @@ async def test_two_agents_use_the_supervisors_answer_and_drop_labels_never_issue
     assert not result.passthrough and result.answer == "Vendor 0 is overdue (database). The SLA changed [W1]."
     assert [c.agent for c in result.calls] == ["db", "web"] and result.calls[1].citation_labels == {"W1": 1, "W2": 2}
     assert result.stop_reason == "answered"
+
+
+def test_fullwidth_labels_become_ascii_and_unknown_ones_are_still_dropped() -> None:
+    """gpt-oss's own citation style 【W1】 / 【W2†L3】 is normalized to [W1]; 【W9】 (never issued) is removed."""
+    web = AgentCall(call_id="w", tool="search_web", agent="web", input={}, status="ok",
+                    result={"answer": "x", "success": True}, citation_labels={"W1": 1, "W2": 2})  # fmt: skip
+    db = AgentCall(call_id="d", tool="ask_database", agent="db", input={}, status="ok",
+                   result={"answer": "y", "success": True})  # fmt: skip
+    text, passthrough = final_answer([db, web], [answer("SLA is 99.99% 【W1】【W2†L3】 and more 【W9】.")])
+    assert text == "SLA is 99.99% [W1][W2] and more." and not passthrough
 
 
 # --------------------------------------------------------------------------- limits (S1, S3, S17)

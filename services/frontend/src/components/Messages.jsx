@@ -6,14 +6,15 @@
  *   UserMessage      - the question, right-aligned in a rounded bubble
  *   AssistantMessage - picks its look from `status` (thinking / error / answer) and, for answers,
  *                      from `payload.agent`: "doc" answers get citations and sources (DocAnswer.jsx),
- *                      "orchestrator" answers (plan 03) get their route and reasoning (AgentFlow.jsx)
+ *                      "orchestrator" answers (plan 03) get agent-call chips, sources, the email
+ *                      approval card and per-call details (OrchestratorAnswer.jsx)
  *   ThinkingMessage  - spinning sparkle + shimmering lines while the agent works
  */
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import AgentFlow from "./AgentFlow.jsx";
 import DocAnswer from "./DocAnswer.jsx";
 import { SparkleIcon } from "./icons.jsx";
+import OrchestratorAnswer from "./OrchestratorAnswer.jsx";
 import ResultDetails from "./ResultDetails.jsx";
 
 /**
@@ -32,14 +33,16 @@ export function UserMessage({ message }) {
  *   pending  -> the thinking row (the reply is still being generated, maybe in another tab)
  *   error    -> the saved error text, in red
  *   complete -> markdown answer + stats + "Show SQL & data"
+ *   awaiting_approval -> (orchestrator answers) the answer + the email approval card
  *
  * The answer text is `content`; the agent's details (SQL, rows, steps) are in
  * payload.result, which ResultDetails already understands. react-markdown never renders
  * raw HTML, so text that came from the database can't inject scripts into the page.
  *
- * @param {{message: object, thinkingLabel?: string}} props
+ * @param {{message: object, thinkingLabel?: string, onEmailDecided?: (message: object|null) => void}} props
+ *   onEmailDecided = the page's handler for an approved/rejected email (swaps in the updated message).
  */
-export function AssistantMessage({ message, thinkingLabel }) {
+export function AssistantMessage({ message, thinkingLabel, onEmailDecided }) {
   if (message.status === "pending") return <ThinkingMessage label={thinkingLabel} />;
 
   const result = message.payload?.result;
@@ -53,16 +56,8 @@ export function AssistantMessage({ message, thinkingLabel }) {
           <p className="error-text">{message.content}</p>
         ) : message.payload?.agent === "doc" && result ? (
           <DocAnswer message={message} />
-        ) : message.payload?.agent === "orchestrator" ? (
-          // Plan 03, stage O4: the answer plus the orchestrator's route and reasoning. Its result has no
-          // rows/columns (those are per agent call), so the DB panels below would crash on it. Stage O5
-          // adds the per-call panels and the email approval card.
-          <>
-            <div className="markdown">
-              <Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
-            </div>
-            {result && <AgentFlow payload={message.payload} result={result} />}
-          </>
+        ) : message.payload?.agent === "orchestrator" && result ? (
+          <OrchestratorAnswer message={message} onEmailDecided={onEmailDecided} />
         ) : (
           <>
             <div className="markdown">

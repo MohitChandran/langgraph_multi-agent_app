@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Final plan, 2026-11-17. O0 + O1 done 2026-11-17, O2-O4 done 2026-11-18 (dev session; notes in Section 20). |
+| **Status** | Final plan, 2026-11-17. O0 + O1 done 2026-11-17, O2-O5 done 2026-11-18 (dev session; notes in Section 20). O6 (eval) open. |
 | **Written in** | a planning session. (Exception: at the user's request it also wrote the dummy web/email agents: `app/agents/web/dummy.py`, `app/agents/email/dummy.py`, `tests/test_dummy_agents.py`, not committed yet.) |
 | **Implement in** | a development session, stage by stage (Section 15). |
 | **Project plan** | `project_plan.txt` **Phase 2 (Orchestrator)** + the approval part of **Phase 6 (HITL)**, using dummy web/email agents until Phases 4–5 build the real ones. |
@@ -522,7 +522,7 @@ Section 11 (service, routes, store migration, memory, lifespan, dependencies).
 - a follow-up ("and only India?") uses memory (the db call's question mentions India);
 - a forced Groq failure falls back to the rule.
 
-### [ ] O5 — Frontend
+### [x] O5 — Frontend  (done 2026-11-18)
 Section 13. **Acceptance:**
 - the calls flow shows the right chips in order;
 - per-call panels reuse the SQL/sources views;
@@ -698,3 +698,22 @@ have overdue invoices?"; scenario 1 → `awaiting_approval`, a second message �
 8. API tests run the REAL orchestrator with a rule-based fake supervisor (`RuleSupervisor`), so memory and routing
    tests go through the whole loop. "Agent crash → error message" became "orchestrator crash → error message" and
    "agent crash → one failed call, the turn completes".
+
+**O5 (2026-11-18).** New `OrchestratorAnswer.jsx`, `EmailApprovalCard.jsx` (+ `EmailOutcome`), `src/calls.js`; `AgentFlow.jsx`
+orchestrator branch; `api.approveEmail`; composer locked while an email waits. Verified in headless Chrome (desktop,
+390 px phone, dark mode) against the live API: approve with an edited body → "✉ Email sent" with that body, survives a
+reload; reject → "nothing was sent"; the composer reads "Approve or reject the email first" and is disabled until then;
+chips and the flow show the calls in order with their status; the db call opens the SQL & rows view; a document
+question passes through with the agent's own [1]; a document + web question shows [D1] [W1] [W2] badges that scroll to
+their sources. Deviations and findings:
+1. **Layout:** chips per call (with status) and a combined Sources list (documents + web pages) are always visible;
+   the ordered flow, the reasoning and one collapsed section per call are in "Show agent calls (N)". The email card
+   sits right under the answer.
+2. **Reuse by extraction:** `DbResultBody` (from `ResultDetails`), `SourceItem` and `RetrievalBody` (from `DocAnswer`)
+   are the existing views without their toggles; the call sections and the old panels share them.
+3. **A call that ran but found nothing** (`status="ok"`, `result.success=false`) shows as "! no answer" (warning), not ✓.
+4. **gpt-oss sometimes writes citations as 【W1】** (its own style; found in a real run): `final_answer` turns
+   `【W1】`/`【W1†L3】` into `[W1]` before dropping unknown labels. The prompt now also says to put the label right after
+   each fact and never replace it with words like "(web sources)" (one run answered "(web sources)").
+5. Greeting examples now show the orchestrator (an email request, a database + web question); the header badge lists
+   the four agents (hidden on phones); the thinking row says "Asking the agents…".
