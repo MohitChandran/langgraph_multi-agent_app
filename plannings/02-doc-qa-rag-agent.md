@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Final plan, 2026-11-12. R0–R8 done 2026-11-14 (dev session); next: R9 (eval). |
+| **Status** | Final plan, 2026-11-12. R0–R8 done 2026-11-14 (dev session). R9 retrieval half done 2026-11-22; the answer half waits for Groq's daily quota. |
 | **Written in** | a planning-only session. No code was changed. |
 | **Implement in** | a development session, stage by stage (Section 10). |
 | **Project plan** | `project_plan.txt` **Phase 3 (Doc QA Agent)**. Settles its open item "PDF parsing library" (Docling). |
@@ -621,7 +621,7 @@ still answers DB questions.
 Section 8. **Acceptance:** upload by button and drag-and-drop with live chips; clickable citations; thumbnails; PDF opens at the
 page; "Show retrieval" works; deleting a document removes its chip.
 
-### [ ] R9 — Evaluation
+### [~] R9 — Evaluation
 Section 12. **Acceptance:** `uv run python evals/run_rag.py` writes `evals/reports/rag-<date>.md`; `RAG_MIN_RERANK_SCORE`
 is set from the score distribution of answerable vs not-in-document questions.
 
@@ -782,3 +782,27 @@ Fakes: a **fake embedder** (deterministic 384-d vectors from a text hash), a **f
     plan, repair attempts, rows, or why no SQL ran).
   - Stored inside the message payload, so a reload shows what happened at the time. Messages saved earlier show the
     route pills without the notes.
+- **R9 eval (2026-11-22).** The script is `evals/rag_eval.py` (not `run_rag.py`; the evals share `evals/common.py`). It
+  uploads the sample PDF through the in-process app (the real ingestion), then per question: the four search modes
+  through `DocAgent.retriever` (dense, keyword, hybrid, hybrid+rerank), then the real agent's answer, scored by a text
+  check with a small LLM judge as fallback. `--retrieval-only` runs the search half alone (no Groq tokens) and `--keep` /
+  `--session` reuse the processed chat, so the answer half can run on another day.
+  Retrieval (evals/reports/rag-retrieval-2026-11-22.md, 20 chunks, 20 answerable + 3 not-in-document questions):
+
+  | Mode | hit@1 | hit@3 | hit@6 | MRR |
+  |---|---|---|---|---|
+  | dense | 85% | 100% | 100% | 0.917 |
+  | keyword | 55% | 100% | 100% | 0.758 |
+  | hybrid | 95% | 100% | 100% | 0.975 |
+  | hybrid+rerank | 90% | 100% | 100% | 0.950 |
+
+  Hybrid beats either search alone; on a 20-chunk document hit@3/@6 are easy (6 chunks are 30% of the document), so
+  hit@1 and MRR are the numbers that tell the modes apart. The reranker fixes q20 (the scanned page) but drops both
+  table-row questions (q08, q11) to rank 2: the cross-encoder scores terse table rows low. Net one hit@1 lost here, a
+  reason to re-measure on a bigger document before calling the reranker a win (the right chunk is still in the top 6).
+  **Threshold: none.** The groups overlap: q22 "What uptime SLA has Accenture committed to?" (not in the document, but
+  the document has an uptime-SLA table for other vendors) scores -0.02, above q11 (Dell's services, a terse table row,
+  -0.30). A score cutoff can't tell a same-topic question about a missing entity from an answerable table question, so
+  `RAG_MIN_RERANK_SCORE` stays empty and the answer model's `answer_found` decides (as before).
+  Answer half (correctness, citations, not-found accuracy): `uv run --project services/orchestrator-api python
+  evals/rag_eval.py --session <kept chat id>` once gpt-oss-20b has daily quota left (~70k tokens).

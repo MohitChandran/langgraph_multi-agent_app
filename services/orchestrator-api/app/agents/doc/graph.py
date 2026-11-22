@@ -67,6 +67,11 @@ class DocAgent:
         self._answerer = answerer or get_llm("strong").with_structured_output(DocAnswer, method="json_schema")
         self.graph = self._build_graph()
 
+    @property
+    def retriever(self) -> Retriever:
+        """The retriever (dense, keyword, fuse, rerank): the R9 eval compares the search modes with it."""
+        return self._retriever
+
     def _build_graph(self):
         """Nodes, the parallel fan-out to both searches, the join into fuse, and the final router."""
         builder = StateGraph(DocAgentState)

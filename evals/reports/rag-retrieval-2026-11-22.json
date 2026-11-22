@@ -1,0 +1,715 @@
+{
+  "meta": {
+    "date": "2026-11-22",
+    "commit": "25b02fc+changes",
+    "document": "data/samples/q3-compliance-report.pdf",
+    "embedding_model": "ibm-granite/granite-embedding-small-english-r2",
+    "rerank_model": "Xenova/ms-marco-MiniLM-L-6-v2",
+    "answer_model": "openai/gpt-oss-20b",
+    "chunks": 20,
+    "minutes": 2.4,
+    "retrieval_only": true
+  },
+  "summary": {
+    "questions": 23,
+    "answerable": 20,
+    "not_in_doc": 3,
+    "retrieval": {
+      "dense": {
+        "hit@1": 0.85,
+        "hit@3": 1.0,
+        "hit@6": 1.0,
+        "mrr": 0.917
+      },
+      "keyword": {
+        "hit@1": 0.55,
+        "hit@3": 1.0,
+        "hit@6": 1.0,
+        "mrr": 0.758
+      },
+      "hybrid": {
+        "hit@1": 0.95,
+        "hit@3": 1.0,
+        "hit@6": 1.0,
+        "mrr": 0.975
+      },
+      "hybrid+rerank": {
+        "hit@1": 0.9,
+        "hit@3": 1.0,
+        "hit@6": 1.0,
+        "mrr": 0.95
+      }
+    },
+    "correct": 0,
+    "judged_by_llm": 0,
+    "citations_ok": 0,
+    "answered_when_possible": 0,
+    "refused_when_not_in_doc": 3,
+    "by_kind": {
+      "text": {
+        "cases": 6,
+        "correct": 0
+      },
+      "table": {
+        "cases": 5,
+        "correct": 0
+      },
+      "picture": {
+        "cases": 6,
+        "correct": 0
+      },
+      "ocr": {
+        "cases": 3,
+        "correct": 0
+      }
+    },
+    "threshold": null,
+    "threshold_reason": "the groups overlap (lowest answerable -0.30 \u2264 highest not-in-document -0.02): a threshold would refuse answerable questions, so none is set; the answer model's own answer_found decides",
+    "scores_answerable": [
+      -0.299,
+      2.055,
+      3.026,
+      3.518,
+      3.983,
+      4.13,
+      5.346,
+      5.753,
+      5.771,
+      5.852,
+      5.998,
+      6.449,
+      6.589,
+      7.262,
+      7.955,
+      8.456,
+      8.575,
+      8.585,
+      8.849,
+      9.988
+    ],
+    "scores_not_in_doc": [
+      -11.244,
+      -10.064,
+      -0.023
+    ],
+    "latency_median_s": 0.0,
+    "latency_max_s": 0.0
+  },
+  "cases": [
+    {
+      "id": "q01",
+      "kind": "text",
+      "question": "What is the minimum monthly uptime cloud providers must commit to?",
+      "expected_pages": [
+        1
+      ],
+      "ranks": {
+        "dense": 1,
+        "keyword": 3,
+        "hybrid": 1,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 8.849,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q02",
+      "kind": "text",
+      "question": "Which invoices need a Finance Director's approval before payment?",
+      "expected_pages": [
+        1
+      ],
+      "ranks": {
+        "dense": 1,
+        "keyword": 1,
+        "hybrid": 1,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 8.585,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q03",
+      "kind": "text",
+      "question": "What payment terms do logistics vendors get?",
+      "expected_pages": [
+        1
+      ],
+      "ranks": {
+        "dense": 1,
+        "keyword": 1,
+        "hybrid": 1,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 8.456,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q04",
+      "kind": "text",
+      "question": "Where must customer data be stored?",
+      "expected_pages": [
+        1
+      ],
+      "ranks": {
+        "dense": 1,
+        "keyword": 1,
+        "hybrid": 1,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 7.955,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q05",
+      "kind": "text",
+      "question": "How much notice must a cloud vendor give before moving data to a new region?",
+      "expected_pages": [
+        1
+      ],
+      "ranks": {
+        "dense": 1,
+        "keyword": 2,
+        "hybrid": 1,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 7.262,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q06",
+      "kind": "text",
+      "question": "What termination clause must every cloud contract include?",
+      "expected_pages": [
+        2
+      ],
+      "ranks": {
+        "dense": 1,
+        "keyword": 2,
+        "hybrid": 1,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 9.988,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q07",
+      "kind": "table",
+      "question": "What service credit applies if Amazon Web Services breaches its SLA?",
+      "expected_pages": [
+        2
+      ],
+      "ranks": {
+        "dense": 1,
+        "keyword": 2,
+        "hybrid": 1,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 3.983,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q08",
+      "kind": "table",
+      "question": "Which cloud vendor commits to the highest uptime?",
+      "expected_pages": [
+        2
+      ],
+      "ranks": {
+        "dense": 2,
+        "keyword": 2,
+        "hybrid": 1,
+        "hybrid+rerank": 2
+      },
+      "best_rerank_score": 4.13,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q09",
+      "kind": "table",
+      "question": "What is Oracle Cloud Infrastructure's response time for critical issues?",
+      "expected_pages": [
+        2
+      ],
+      "ranks": {
+        "dense": 2,
+        "keyword": 2,
+        "hybrid": 1,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 3.518,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q10",
+      "kind": "table",
+      "question": "Who owns the Cisco Systems VPN appliances contract and when is its next review?",
+      "expected_pages": [
+        5
+      ],
+      "ranks": {
+        "dense": 1,
+        "keyword": 1,
+        "hybrid": 1,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 5.753,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q11",
+      "kind": "table",
+      "question": "Which services does Dell Technologies provide according to the vendor service register?",
+      "expected_pages": [
+        5
+      ],
+      "ranks": {
+        "dense": 1,
+        "keyword": 1,
+        "hybrid": 1,
+        "hybrid+rerank": 2
+      },
+      "best_rerank_score": -0.299,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q12",
+      "kind": "picture",
+      "question": "How many security incidents were there in Q3 2026?",
+      "expected_pages": [
+        2
+      ],
+      "ranks": {
+        "dense": 1,
+        "keyword": 1,
+        "hybrid": 1,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 3.026,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q13",
+      "kind": "picture",
+      "question": "What is the forecast number of security incidents for Q4?",
+      "expected_pages": [
+        2
+      ],
+      "ranks": {
+        "dense": 1,
+        "keyword": 1,
+        "hybrid": 1,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 5.998,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q14",
+      "kind": "picture",
+      "question": "Approximately how much was spent on Amazon Web Services in Q3 2026?",
+      "expected_pages": [
+        3
+      ],
+      "ranks": {
+        "dense": 1,
+        "keyword": 2,
+        "hybrid": 1,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 6.589,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q15",
+      "kind": "picture",
+      "question": "Roughly what was the Q3 cloud spend on Google Cloud?",
+      "expected_pages": [
+        3
+      ],
+      "ranks": {
+        "dense": 1,
+        "keyword": 2,
+        "hybrid": 1,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 5.346,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q16",
+      "kind": "picture",
+      "question": "In the escalation process, what happens after support triage if the incident is critical?",
+      "expected_pages": [
+        3
+      ],
+      "ranks": {
+        "dense": 1,
+        "keyword": 1,
+        "hybrid": 1,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 5.771,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q17",
+      "kind": "picture",
+      "question": "Within how many days must a post-incident review happen?",
+      "expected_pages": [
+        3
+      ],
+      "ranks": {
+        "dense": 1,
+        "keyword": 1,
+        "hybrid": 1,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 2.055,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q18",
+      "kind": "ocr",
+      "question": "What did the internal audit find about Deloitte invoices?",
+      "expected_pages": [
+        4
+      ],
+      "ranks": {
+        "dense": 1,
+        "keyword": 1,
+        "hybrid": 1,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 5.852,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q19",
+      "kind": "ocr",
+      "question": "When did the Lenovo hardware contract expire?",
+      "expected_pages": [
+        4
+      ],
+      "ranks": {
+        "dense": 1,
+        "keyword": 3,
+        "hybrid": 1,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 8.575,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q20",
+      "kind": "ocr",
+      "question": "What share of their declared value were DHL Supply Chain shipments insured for?",
+      "expected_pages": [
+        4
+      ],
+      "ranks": {
+        "dense": 3,
+        "keyword": 1,
+        "hybrid": 2,
+        "hybrid+rerank": 1
+      },
+      "best_rerank_score": 6.449,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q21",
+      "kind": "not_in_doc",
+      "question": "What is our parental leave policy?",
+      "expected_pages": [],
+      "ranks": {
+        "dense": null,
+        "keyword": null,
+        "hybrid": null,
+        "hybrid+rerank": null
+      },
+      "best_rerank_score": -11.244,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q22",
+      "kind": "not_in_doc",
+      "question": "What uptime SLA has Accenture committed to?",
+      "expected_pages": [],
+      "ranks": {
+        "dense": null,
+        "keyword": null,
+        "hybrid": null,
+        "hybrid+rerank": null
+      },
+      "best_rerank_score": -0.023,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    },
+    {
+      "id": "q23",
+      "kind": "not_in_doc",
+      "question": "How many employees does Acme Operations have?",
+      "expected_pages": [],
+      "ranks": {
+        "dense": null,
+        "keyword": null,
+        "hybrid": null,
+        "hybrid+rerank": null
+      },
+      "best_rerank_score": -10.064,
+      "grounded": false,
+      "answer": "",
+      "cited_pages": [],
+      "correct": null,
+      "judged_by": "-",
+      "missing": [],
+      "citations_ok": null,
+      "not_found_ok": true,
+      "seconds": 0.0,
+      "notes": [
+        "retrieval only"
+      ]
+    }
+  ]
+}
