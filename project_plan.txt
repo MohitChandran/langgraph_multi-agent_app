@@ -315,6 +315,11 @@ Rule: Claude writes the code and explains every file/function; interview prep ha
 [ ] Phase 4 — Web Search via MCP
     Build: connect to the DuckDuckGo MCP server; tool discovery; parallel branches for
            Scenario 2. Bonus: our own minimal MCP server.
+    Plan: plannings/04-guardrails-and-web-search-agent.md (stages W0-W6): a NeMo Guardrails input guard in front of the
+          orchestrator + the real web agent (DuckDuckGo MCP server via uvx) + one email recipient.
+    Steps: [x] W0-W2 (2026-11-22): packages + settings; input guard (Prompt Guard advisory, safety model decides;
+               34/34 on the guard cases) in front of /api/chat and /api/db/ask, "Guardrail ⛔/✓" in the UI
+           [ ] W3 MCP connection  [ ] W4 web agent (LangGraph)  [ ] W5 orchestrator integration  [ ] W6 evals
     Learn: MCP architecture, stdio vs HTTP transports, tool schemas, parallel graph branches.
 
 [ ] Phase 5 — Email Agent via A2A (no HITL yet)

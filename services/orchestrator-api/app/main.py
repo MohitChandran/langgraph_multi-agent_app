@@ -5,7 +5,8 @@ Endpoints:
                                   orchestrator (app/chat/routes.py)
   - /api/messages/{id}/email-approval  approve / reject an email the orchestrator drafted
   - /api/documents/...            document upload, status, files (app/documents/routes.py)
-  - POST /api/db/ask              one-off question to the DB agent, nothing saved (CLI, debugging, evals)
+  - POST /api/db/ask              one-off question to the DB agent, nothing saved (CLI, debugging, evals);
+                                  checked by the input guard first, like every chat message
   - GET /api/health               liveness check
 
 Run it (from services/orchestrator-api):
@@ -42,8 +43,9 @@ from app.agents.web.dummy import DummyWebSearchAgent
 from app.chat.routes import router as chat_router
 from app.chat.store import ChatStore
 from app.config import get_settings
-from app.dependencies import DBAgentDep
+from app.dependencies import DBAgentDep, InputGuardDep
 from app.documents.routes import router as documents_router
+from app.guardrails.guard import InputGuard
 from app.llm import get_llm
 from app.orchestrator.checkpoint import CheckpointStore
 from app.orchestrator.graph import Orchestrator
@@ -66,7 +68,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
       3. open the document pool and create the document tables (app.state.document_store)
       4. load the document models ONCE (embedder, reranker, tokenizer, Docling converter; plan
          gotcha 6), build the Doc agent
-      5. build the orchestrator (plan 03): the agents as tools (dummy web/email agents for now), the
+      5. build the input guard (plan 04: NeMo Guardrails, its own Groq models) and the orchestrator
+         (plan 03): the agents as tools (dummy web/email agents for now), the
          Postgres checkpointer for paused email approvals, minus checkpoints nobody can approve any
          more (app.state.orchestrator)
       6. recover interrupted documents and start the ingestion worker
@@ -125,6 +128,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await checkpoints.setup()
         orphans = await checkpoints.delete_orphans(await chat_store.awaiting_approval_message_ids())
         app.state.orchestrator = Orchestrator(tools, checkpoints.saver)
+        app.state.input_guard = InputGuard.from_settings(settings)  # warns loudly if GUARD_ENABLED=false
         logger.info(
             "Orchestrator ready (%s; %d stale checkpoint threads deleted)", settings.groq_orchestrator_model, orphans
         )
@@ -184,13 +188,18 @@ async def health() -> dict[str, str]:
 
 
 @app.post("/api/db/ask")
-async def ask_db(body: AskRequest, agent: DBAgentDep) -> DBAgentResult:
+async def ask_db(body: AskRequest, guard: InputGuardDep, agent: DBAgentDep) -> DBAgentResult:
     """Run the DB agent on one question, with no chat and no memory (for the CLI, debugging and evals).
 
+    The input guard checks the question first (plan 04: nothing reaches an agent unchecked): a blocked
+    question gets 400 with the refusal as `detail`, and the DB agent never sees it.
     Returns the answer, SQL, rows and workflow steps; nothing is saved. The agent already
     turns bad SQL and database errors into a normal answer (via its retry loop). Anything
     else, e.g. Groq unreachable after all retries, becomes a 502 and is logged in full.
     """
+    verdict = await guard.check(body.question.strip())
+    if verdict.status == "blocked":
+        raise HTTPException(status_code=400, detail=verdict.answer)
     try:
         return await agent.ask(body.question.strip())
     except Exception as error:

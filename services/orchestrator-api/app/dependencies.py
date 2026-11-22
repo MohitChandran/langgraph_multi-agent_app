@@ -16,6 +16,7 @@ from fastapi import Depends, Request
 from app.agents.db.graph import DBAgent
 from app.agents.doc.store import DocumentStore
 from app.chat.store import ChatStore
+from app.guardrails.guard import InputGuard
 from app.orchestrator.graph import Orchestrator
 
 
@@ -34,6 +35,11 @@ def get_orchestrator(request: Request) -> Orchestrator:
     return request.app.state.orchestrator
 
 
+def get_input_guard(request: Request) -> InputGuard:
+    """The input guard (NeMo Guardrails) built once in the lifespan (main.py); checks messages before any agent."""
+    return request.app.state.input_guard
+
+
 def get_document_store(request: Request) -> DocumentStore:
     """The document store opened once in the lifespan (main.py)."""
     return request.app.state.document_store
@@ -44,3 +50,4 @@ DBAgentDep = Annotated[DBAgent, Depends(get_db_agent)]
 ChatStoreDep = Annotated[ChatStore, Depends(get_chat_store)]
 DocumentStoreDep = Annotated[DocumentStore, Depends(get_document_store)]
 OrchestratorDep = Annotated[Orchestrator, Depends(get_orchestrator)]
+InputGuardDep = Annotated[InputGuard, Depends(get_input_guard)]

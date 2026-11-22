@@ -7,11 +7,13 @@
  *   AssistantMessage - picks its look from `status` (thinking / error / answer) and, for answers,
  *                      from `payload.agent`: "doc" answers get citations and sources (DocAnswer.jsx),
  *                      "orchestrator" answers (plan 03) get agent-call chips, sources, the email
- *                      approval card and per-call details (OrchestratorAnswer.jsx)
+ *                      approval card and per-call details (OrchestratorAnswer.jsx); "guard" answers
+ *                      (plan 04: the input guard blocked the message) show the refusal and why
  *   ThinkingMessage  - spinning sparkle + shimmering lines while the agent works
  */
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import AgentFlow from "./AgentFlow.jsx";
 import DocAnswer from "./DocAnswer.jsx";
 import { SparkleIcon } from "./icons.jsx";
 import OrchestratorAnswer from "./OrchestratorAnswer.jsx";
@@ -58,6 +60,15 @@ export function AssistantMessage({ message, thinkingLabel, onEmailDecided }) {
           <DocAnswer message={message} />
         ) : message.payload?.agent === "orchestrator" && result ? (
           <OrchestratorAnswer message={message} onEmailDecided={onEmailDecided} />
+        ) : message.payload?.agent === "guard" ? (
+          // Blocked by the input guard (plan 04): the refusal, then where it stopped and why. Its result is a
+          // GuardResult, not a DB result, so the DB panels below would crash on it.
+          <>
+            <p className="guard-refusal">{message.content}</p>
+            <div className="details-panel guard-panel">
+              <AgentFlow payload={message.payload} result={result} />
+            </div>
+          </>
         ) : (
           <>
             <div className="markdown">

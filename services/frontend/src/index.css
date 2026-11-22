@@ -1287,6 +1287,23 @@ summary.email-card-head {
   color: var(--text-muted);
 }
 
+/* ---------- input guard (plan 04): a blocked message ---------- */
+
+.guard-refusal {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.guard-panel {
+  margin-top: 10px;
+}
+
+.guard-panel .flow {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
 /* ---------- phones ---------- */
 
 @media (max-width: 560px) {

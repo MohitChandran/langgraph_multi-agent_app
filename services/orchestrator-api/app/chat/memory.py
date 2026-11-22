@@ -8,7 +8,9 @@ back into the prompt each time (plan 01, section 5):
     tokens as turn 4. Sending the whole chat would make every turn more expensive than
     the last and hit Groq's tokens-per-minute limits within a few turns;
   - only question + SQL + a SHORT answer, never the result rows (they'd bloat the prompt);
-  - only 'complete' messages, so failed or pending replies don't pollute memory.
+  - only 'complete' messages, so failed or pending replies don't pollute memory;
+  - never a turn the input guard blocked (plan 04): a refusal must not become conversation context,
+    and the blocked question must not be "continued" by a follow-up.
 
 The SQL is included on purpose: for a follow-up like "only the ones in India", the
 easiest correct move is to take the previous query and add a filter. For Doc agent answers
@@ -52,7 +54,7 @@ async def load_history(store: ChatStore, session_id: UUID, max_turns: int) -> li
     turns = [
         _turn(question, answer)
         for question, answer in zip(rows, rows[1:], strict=False)
-        if question["role"] == "user" and answer["role"] == "assistant"
+        if question["role"] == "user" and answer["role"] == "assistant" and answer["agent"] != "guard"
     ]
     return turns[-max_turns:]
 

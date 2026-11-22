@@ -28,7 +28,7 @@ from app.chat.service import (
     send_message,
 )
 from app.config import get_settings
-from app.dependencies import ChatStoreDep, OrchestratorDep
+from app.dependencies import ChatStoreDep, InputGuardDep, OrchestratorDep
 from app.orchestrator.models import EmailDecision
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -44,10 +44,14 @@ ERROR_STATUS = {
 
 
 @router.post("/chat")
-async def chat(body: ChatRequest, store: ChatStoreDep, orchestrator: OrchestratorDep) -> ChatResponse:
+async def chat(
+    body: ChatRequest, store: ChatStoreDep, guard: InputGuardDep, orchestrator: OrchestratorDep
+) -> ChatResponse:
     """Send one message and wait for the answer. Both are saved before this returns.
 
-    The orchestrator (plan 03) decides which agents to ask: the database, this chat's documents, the
+    The input guard (plan 04) checks the message first: a jailbreak or a harmful request gets a refusal as
+    the answer (payload.agent "guard") and nothing else runs.
+    Otherwise the orchestrator (plan 03) decides which agents to ask: the database, this chat's documents, the
     web, and/or an email draft. The agents see the last CHAT_MEMORY_TURNS exchanges of this chat.
     If it drafts an email, the answer comes back with status "awaiting_approval": decide with
     POST /api/messages/{id}/email-approval.
@@ -55,7 +59,7 @@ async def chat(body: ChatRequest, store: ChatStoreDep, orchestrator: Orchestrato
     """
     memory_turns = get_settings().chat_memory_turns
     try:
-        return await send_message(store, orchestrator, body.session_id, body.content.strip(), memory_turns)
+        return await send_message(store, guard, orchestrator, body.session_id, body.content.strip(), memory_turns)
     except tuple(ERROR_STATUS) as error:
         raise HTTPException(ERROR_STATUS[type(error)], str(error)) from error
 

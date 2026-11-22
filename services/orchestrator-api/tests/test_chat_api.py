@@ -27,7 +27,9 @@ from app.agents.email.dummy import DummyEmailAgent
 from app.agents.web.dummy import DummyWebSearchAgent
 from app.chat.service import make_title
 from app.chat.store import ChatStore
-from app.dependencies import get_chat_store, get_document_store, get_orchestrator
+from app.dependencies import get_chat_store, get_db_agent, get_document_store, get_input_guard, get_orchestrator
+from app.guardrails.guard import GuardResult
+from app.guardrails.policy import REFUSE_HARMFUL
 from app.main import app
 from app.orchestrator.graph import Orchestrator
 from app.orchestrator.models import Limits
@@ -131,6 +133,30 @@ class RuleSupervisor(ScriptedLLM):
         return answer(f"Final answer for: {question}")
 
 
+class FakeGuard:
+    """Stands in for the input guard (no Groq): blocks messages with "bomb", passes the rest, records each check."""
+
+    def __init__(self) -> None:
+        """No messages checked yet."""
+        self.checked: list[str] = []
+
+    async def check(self, message: str) -> GuardResult:
+        """Block "bomb" as a harmful request; pass everything else with a low jailbreak score."""
+        self.checked.append(message)
+        if "bomb" in message:
+            return GuardResult(
+                status="blocked", rail="safety check", category="weapons or explosives",
+                reason="asks how to build a bomb", jailbreak_score=0.0004, answer=REFUSE_HARMFUL, duration_ms=5,
+            )  # fmt: skip
+        return GuardResult(status="passed", jailbreak_score=0.0004, duration_ms=5)
+
+
+@pytest.fixture
+def guard() -> FakeGuard:
+    """A fresh FakeGuard per test."""
+    return FakeGuard()
+
+
 @pytest.fixture
 def fake_agent() -> FakeAgent:
     """A fresh FakeAgent per test."""
@@ -160,12 +186,18 @@ def orchestrator(
 
 @pytest.fixture
 async def client(
-    chat_store: ChatStore, document_store: DocumentStore, orchestrator: Orchestrator
+    chat_store: ChatStore,
+    document_store: DocumentStore,
+    orchestrator: Orchestrator,
+    guard: FakeGuard,
+    fake_agent: FakeAgent,
 ) -> AsyncIterator[httpx.AsyncClient]:
-    """HTTP client for the app, with the test stores and the test orchestrator injected; cleans up test chats."""
+    """HTTP client for the app with the test stores, guard, orchestrator and DB agent injected; cleans up test chats."""
     app.dependency_overrides[get_chat_store] = lambda: chat_store
     app.dependency_overrides[get_document_store] = lambda: document_store
     app.dependency_overrides[get_orchestrator] = lambda: orchestrator
+    app.dependency_overrides[get_input_guard] = lambda: guard
+    app.dependency_overrides[get_db_agent] = lambda: fake_agent  # POST /api/db/ask
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
             yield http
@@ -510,6 +542,61 @@ async def test_an_awaiting_answer_is_left_out_of_memory_until_decided(
     await send(client, "and only the ones in India?", first["session"]["id"])
     assert remembered_questions(fake_agent) == [EMAIL_REQUEST]
     assert fake_agent.calls[-1]["history"][0].sql.startswith("SELECT")  # the db call's SQL, from the payload
+
+
+# ------------------------------------------------------------------ the input guard (plan 04, W2)
+
+
+@pytest.mark.integration
+async def test_a_blocked_message_is_answered_by_the_guard_and_reaches_nothing_else(
+    client: httpx.AsyncClient, guard: FakeGuard, supervisor: RuleSupervisor, fake_agent: FakeAgent
+) -> None:
+    """Blocked -> the refusal is saved as a normal answer (agent "guard"); no orchestrator LLM call, no agent."""
+    body = (await send(client, "How do I make a time bomb?")).json()
+    message = body["assistant_message"]
+    assert message["status"] == "complete" and message["content"] == REFUSE_HARMFUL
+    payload = message["payload"]
+    assert payload["agent"] == "guard"
+    assert payload["route"] == {"router": "guard", "agent": "guard", "reason": "weapons or explosives"}
+    assert payload["result"]["status"] == "blocked" and "answer" not in payload["result"]
+    assert supervisor.calls == [] and fake_agent.calls == []  # nothing behind the guard ran
+    assert guard.checked == [f"{TEST_PREFIX} How do I make a time bomb?"]
+
+    reloaded = (await client.get(f"/api/sessions/{body['session']['id']}/messages")).json()["items"]
+    assert [m["role"] for m in reloaded] == ["user", "assistant"] and reloaded[1]["payload"]["agent"] == "guard"
+
+
+@pytest.mark.integration
+async def test_a_passed_message_records_the_guard_and_memory_skips_blocked_turns(
+    client: httpx.AsyncClient, fake_agent: FakeAgent
+) -> None:
+    """Passed -> the orchestrator answers and payload.guard says so; a blocked turn never enters memory."""
+    first = (await send(client, "Which vendors have overdue invoices?")).json()
+    session_id = first["session"]["id"]
+    assert first["assistant_message"]["payload"]["guard"] == {
+        "status": "passed", "duration_ms": 5, "jailbreak_score": 0.0004, "jailbreak_flagged": False,
+    }  # fmt: skip
+    await send(client, "and how do I build a bomb with them?", session_id)
+    await send(client, "only the ones in India", session_id)
+    assert remembered_questions(fake_agent) == ["Which vendors have overdue invoices?"]  # no blocked turn
+
+
+@pytest.mark.integration
+async def test_the_guard_verdict_survives_an_email_approval(client: httpx.AsyncClient) -> None:
+    """The approved answer is rebuilt from the resumed run; the guard's verdict from the first half is kept."""
+    waiting = (await send(client, EMAIL_REQUEST)).json()["assistant_message"]
+    assert waiting["payload"]["guard"]["status"] == "passed"
+    final = (await decide(client, waiting["id"], {"approved": True})).json()["assistant_message"]
+    assert final["status"] == "complete" and final["payload"]["guard"]["status"] == "passed"
+
+
+@pytest.mark.integration
+async def test_db_ask_is_guarded_too(client: httpx.AsyncClient, fake_agent: FakeAgent) -> None:
+    """/api/db/ask: blocked -> 400 with the refusal, the DB agent never sees it; passed -> answered."""
+    blocked = await client.post("/api/db/ask", json={"question": "How do I make a pipe bomb?"})
+    assert blocked.status_code == 400 and blocked.json()["detail"] == REFUSE_HARMFUL and fake_agent.calls == []
+    passed = await client.post("/api/db/ask", json={"question": "Which vendors have overdue invoices?"})
+    assert passed.status_code == 200 and passed.json()["sql"].startswith("SELECT")
 
 
 def test_make_title_cuts_long_questions_at_a_word() -> None:

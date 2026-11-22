@@ -5,15 +5,17 @@
     3  an email in this chat still waits for approval?  409 (S15), nothing is saved
     4  load memory: the last few exchanges of THIS chat (before saving the new question!)
     5  save the question + a 'pending' answer slot, in one transaction
-    6  run the orchestrator with the question and the memory
-    7  save its result into that slot: complete, error, or awaiting_approval (an email draft waits)
-    8  ALWAYS release the claim (finally), so a crash can't leave the chat stuck "busy"
+    6  the input guard checks the message (plan 04): BLOCKED -> the refusal is saved as the answer and
+       nothing else runs (no orchestrator, no agent, no tool); PASSED -> go on
+    7  run the orchestrator with the question and the memory
+    8  save its result into that slot: complete, error, or awaiting_approval (an email draft waits)
+    9  ALWAYS release the claim (finally), so a crash can't leave the chat stuck "busy"
 
 An answer that waits for approval is finished later by resolve_email_approval(): the user's
 decision resumes the paused orchestrator run, and the SAME message gets the final answer.
 
 This module knows nothing about HTTP: routes.py turns its exceptions into status codes.
-It takes the store and the orchestrator as parameters, so tests pass fakes.
+It takes the store, the guard and the orchestrator as parameters, so tests pass fakes.
 """
 
 import logging
@@ -26,6 +28,7 @@ import psycopg
 from app.chat.memory import ConversationTurn, load_history
 from app.chat.models import ApprovalResponse, ChatResponse, Message
 from app.chat.store import ChatStore
+from app.guardrails.guard import GuardResult
 from app.orchestrator.models import EmailDecision, OrchestratorResult
 
 logger = logging.getLogger(__name__)
@@ -79,6 +82,14 @@ class ChatOrchestrator(Protocol):
         ...
 
 
+class ChatGuard(Protocol):
+    """What the chat service needs from the input guard (app/guardrails/guard.py). Tests pass fakes."""
+
+    async def check(self, message: str) -> GuardResult:
+        """passed / blocked (with the refusal text) for one message; never raises."""
+        ...
+
+
 def make_title(content: str) -> str:
     """Title for a new chat: its first question, cut to TITLE_MAX_CHARS at a word boundary."""
     text = " ".join(content.split())  # collapse newlines and repeated spaces
@@ -90,6 +101,7 @@ def make_title(content: str) -> str:
 
 async def send_message(
     store: ChatStore,
+    guard: ChatGuard,
     orchestrator: ChatOrchestrator,
     session_id: UUID | None,
     content: str,
@@ -98,6 +110,10 @@ async def send_message(
     """Run one turn and return the session plus the saved question and answer.
 
     `memory_turns` = how many earlier exchanges of this chat the orchestrator sees (CHAT_MEMORY_TURNS).
+
+    The guard runs AFTER the question is saved, so a blocked turn is part of the transcript like any
+    answer (a reload shows it), and BEFORE the orchestrator, so a blocked message reaches no LLM but
+    the guard's own models, no agent and no tool.
 
     If the orchestrator fails (e.g. Groq unreachable after its retries and fallbacks), the answer
     is saved with status 'error' and a readable text, and the turn still returns normally: the
@@ -125,12 +141,18 @@ async def send_message(
             raise SessionNotFoundError(f"Chat {session_id} was deleted.") from error
 
         started = time.perf_counter()
-        try:
-            result = await orchestrator.ask(content, history, session_id, pending.id)
-        except Exception:  # the orchestrator catches its own failures; this is the last safety net
-            logger.exception("Orchestrator crashed for message %s", pending.id)
-            result = None
-        assistant_message = await save_result(store, pending.id, result, _elapsed_ms(started))
+        verdict = await guard.check(content)
+        if verdict.status == "blocked":
+            payload = guard_payload(verdict)
+            assistant_message = await store.complete_message(pending.id, verdict.answer, payload, _elapsed_ms(started))
+        else:
+            try:
+                result = await orchestrator.ask(content, history, session_id, pending.id)
+            except Exception:  # the orchestrator catches its own failures; this is the last safety net
+                logger.exception("Orchestrator crashed for message %s", pending.id)
+                result = None
+            passed = {"guard": guard_summary(verdict)}
+            assistant_message = await save_result(store, pending.id, result, _elapsed_ms(started), passed)
     finally:
         session = await store.release_session(session_id)
 
@@ -173,7 +195,8 @@ async def resolve_email_approval(
             logger.exception("Orchestrator crashed resuming message %s", message_id)
             result = None
         latency = (message.latency_ms or 0) + _elapsed_ms(started)  # time before the pause + after it
-        assistant_message = await save_result(store, message_id, result, latency)
+        kept = {"guard": message.payload["guard"]} if "guard" in message.payload else None  # from the first half
+        assistant_message = await save_result(store, message_id, result, latency, kept)
     finally:
         session = await store.release_session(session_id)
 
@@ -183,18 +206,23 @@ async def resolve_email_approval(
 
 
 async def save_result(
-    store: ChatStore, message_id: int, result: OrchestratorResult | None, latency_ms: int
+    store: ChatStore,
+    message_id: int,
+    result: OrchestratorResult | None,
+    latency_ms: int,
+    extra: dict[str, Any] | None = None,
 ) -> Message | None:
     """Fill the answer slot according to the result's status. None if the message vanished (chat deleted).
 
     completed          -> 'complete', the answer as content, the result as payload
     awaiting_approval  -> 'awaiting_approval', "I drafted an email ..." as content (the UI shows the draft)
     failed / crashed   -> 'error', a readable text
+    `extra` is merged into the payload (the guard's "passed" verdict, shown in the UI flow).
     """
     if result is None or result.status == "failed":
         text = result.answer if result is not None else AGENT_FAILED_TEXT
         return await store.fail_message(message_id, text, latency_ms)
-    payload = orchestrator_payload(result)
+    payload = orchestrator_payload(result) | (extra or {})
     if result.status == "awaiting_approval":
         return await store.mark_awaiting_approval(message_id, result.answer, payload, latency_ms)
     return await store.complete_message(message_id, result.answer, payload, latency_ms)
@@ -218,6 +246,24 @@ def orchestrator_payload(result: OrchestratorResult) -> dict[str, Any]:
         "route": route,
         "result": result.model_dump(mode="json", exclude={"question", "answer"}),
     }
+
+
+def guard_payload(verdict: GuardResult) -> dict[str, Any]:
+    """What is saved with a BLOCKED turn: agent "guard", a route for the UI's flow panel, and the verdict.
+
+    The refusal itself is the message content (verdict.answer), so it isn't stored twice.
+    """
+    reason = verdict.category or verdict.rail or "blocked"
+    return {
+        "agent": "guard",
+        "route": {"router": "guard", "agent": "guard", "reason": reason},
+        "result": verdict.model_dump(mode="json", exclude={"answer"}),
+    }
+
+
+def guard_summary(verdict: GuardResult) -> dict[str, Any]:
+    """The guard's verdict on a PASSED turn, kept in the orchestrator's payload ("Guardrail ✓" in the UI)."""
+    return verdict.model_dump(mode="json", include={"status", "duration_ms", "jailbreak_score", "jailbreak_flagged"})
 
 
 async def _claim(store: ChatStore, session_id: UUID) -> None:
