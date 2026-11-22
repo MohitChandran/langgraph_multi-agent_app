@@ -1,0 +1,8 @@
+# NeMo Guardrails config for the input guard (plannings/04, section 5.3).
+# Only INPUT rails, run in this order: if "jailbreak check" blocks, "safety check" never runs.
+# No `models:` section: the rails call our own actions (app/guardrails/actions.py), not NeMo's LLM.
+rails:
+  input:
+    flows:
+      - jailbreak check
+      - safety check

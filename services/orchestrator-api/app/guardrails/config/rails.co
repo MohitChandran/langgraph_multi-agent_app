@@ -1,0 +1,32 @@
+# The two input rails (Colang 1.0). Each calls one of our Python actions (app/guardrails/actions.py).
+# "bot refuse ..." + "stop" ends the check as BLOCKED, with that message as the reply.
+# The refusal texts must match app/guardrails/policy.py (a test compares them).
+#
+# Rail 1 is ADVISORY (plan 04, section 16): Prompt Guard scored normal messages like "Ignore the cancelled
+# invoices..." as high as real attacks, so it only records its score ("ok" / "flag" / "error") and never
+# blocks. Rail 2, the safety model, decides; its policy also covers jailbreaks. It returns "jailbreak"
+# (blocked, and Prompt Guard flagged it or the model called it a jailbreak), "block", "allow" or "error".
+
+define bot refuse jailbreak
+  "That message looks like an attempt to change how the assistant works, so I can't process it. Please ask your question directly."
+
+define bot refuse harmful
+  "I can't help with that request because it could cause harm or break the law. I'm happy to help with something else."
+
+define bot refuse unavailable
+  "I couldn't run the safety check right now, so I didn't process your message. Please try again in a moment."
+
+define flow jailbreak check
+  execute prompt_guard_check(text=$user_message)
+
+define flow safety check
+  $safety = execute safety_model_check(text=$user_message)
+  if $safety == "jailbreak"
+    bot refuse jailbreak
+    stop
+  if $safety == "block"
+    bot refuse harmful
+    stop
+  if $safety == "error"
+    bot refuse unavailable
+    stop
