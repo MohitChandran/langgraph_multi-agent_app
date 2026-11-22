@@ -2,8 +2,9 @@
  * Email cards for orchestrator answers (plan 03, section 13):
  *
  *   EmailApprovalCard - the answer is "awaiting_approval": the orchestrator drafted an email and is
- *                       PAUSED until you decide. Shows To and Subject, an editable Body, and
- *                       "Approve & send" / "Reject". Nothing is sent before you click.
+ *                       PAUSED until you decide. Shows To and Subject, an editable Body, the email
+ *                       crew's reviewer notes (if any), and "Approve & send" / "Reject". Nothing is
+ *                       sent before you click.
  *   EmailOutcome      - after the decision: sent / rejected / not sent, with the final body folded away.
  *
  * Approving calls POST /api/messages/{id}/email-approval, which resumes the paused orchestrator run
@@ -15,7 +16,7 @@ import { approveEmail } from "../api.js";
 
 /**
  * @param {{messageId: number, email: object, onDecided: (message: object|null) => void}} props
- *   email = payload.result.email: {to, subject, body, status, ...}.
+ *   email = payload.result.email: {to, subject, body, status, issues, ...}.
  *   onDecided = called with the updated assistant message, or null when the page should reload
  *   (e.g. the email was already decided in another tab: 409).
  */
@@ -61,6 +62,9 @@ export default function EmailApprovalCard({ messageId, email, onDecided }) {
         maxLength={5000}
         disabled={pending !== null}
       />
+      {email.issues?.length > 0 && (
+        <p className="email-issues">Reviewer notes: {email.issues.join("; ")}</p>
+      )}
       {error && <p className="error-text">{error}</p>}
       <div className="email-actions">
         <button

@@ -247,7 +247,7 @@ def next_labels(calls: list[AgentCall]) -> dict[str, int]:
 
 
 class AskAgent(Protocol):
-    """Anything with the agents' common interface: DBAgent, DocAgent, DummyWebSearchAgent."""
+    """Anything with the agents' common interface: DBAgent, DocAgent, WebSearchAgent (and the dummies in tests)."""
 
     name: str
 
@@ -256,13 +256,18 @@ class AskAgent(Protocol):
 
 
 class EmailAgent(Protocol):
-    """The email agent's two-step interface: draft (ask) now, apply the human's decision (resume) later."""
+    """The email agent's two-step interface: draft now, apply the human's decision later (plan 05, 8.2).
 
-    async def ask(self, question: str, history=None, session_id=None, *, context: str | None = None):  # noqa: ANN001
-        """Draft an email and return it for approval; never sends."""
+    A2AEmailAgent (the email service over A2A) and DummyEmailAgent (tests) both have it.
+    """
 
-    async def resume(self, draft_id: UUID, approved: bool, edited_body: str | None = None):
-        """Send (approved) or discard (rejected) a draft."""
+    async def draft(self, to: str, subject: str, content: str, *, request: str = ""):
+        """Draft an email to ONE recipient and return it for approval; never sends."""
+
+    async def resume(
+        self, draft_id: UUID, approved: bool, edited_body: str | None = None, *, context_id: str | None = None
+    ):
+        """Send (approved) or discard (rejected) a draft; context_id is the A2A task's context."""
 
 
 class DocumentLister(Protocol):
@@ -274,11 +279,12 @@ class DocumentLister(Protocol):
 
 @dataclass(frozen=True)
 class TurnContext:
-    """What every tool call of one question shares: the chat, its recent history, the next free citation labels."""
+    """What every tool call of one question shares: the chat, its history, the citation labels, the question."""
 
     session_id: UUID | None
     history: list[ConversationTurn] = field(default_factory=list)
     next_labels: dict[str, int] = field(default_factory=lambda: {"D": 1, "W": 1})
+    question: str = ""  # the user's message: the email service uses it for the email's tone and purpose
 
 
 @dataclass(frozen=True)
@@ -330,13 +336,22 @@ class AgentTools:
 
         ask_documents only exists when the chat has at least one document (any status: the Doc agent
         itself says "still processing"). The filenames go into ask_documents' description.
-        search_web only exists while the web agent can search (its MCP server is running, plan 04 section 6);
-        an agent without an `available` attribute (the dummy) always can.
+        search_web only exists while the web agent can search (its MCP server is running, plan 04 section 6), and
+        draft_email only while the email service was reached (plan 05, D10); an agent without an `available`
+        attribute (the dummies) always can.
         """
         documents = await self.documents.list_documents(session_id) if session_id else []
         names = [document.filename for document in documents]
         web = getattr(self.agents["web"], "available", True)
-        tools = ["ask_database", *(["ask_documents"] if names else []), *(["search_web"] if web else []), "draft_email"]
+        if refresh := getattr(self.email_agent, "refresh", None):
+            await refresh()  # an unavailable email service is looked for again (at most every 30 s)
+        email = getattr(self.email_agent, "available", True)
+        tools = [
+            "ask_database",
+            *(["ask_documents"] if names else []),
+            *(["search_web"] if web else []),
+            *(["draft_email"] if email else []),
+        ]
         return tools, names
 
     async def run(self, requests: list[ToolRequest], ctx: TurnContext) -> list[ToolOutcome]:
@@ -392,14 +407,14 @@ class AgentTools:
     async def draft_email(self, call_id: str, args: DraftEmailArgs, ctx: TurnContext) -> ToolOutcome:
         """Ask the email agent for a DRAFT. Nothing is sent; the result waits for the human (PendingEmail).
 
-        The dummy agent reads the recipients from the request text, so they always match `args.to`.
-        A failure returns an error outcome with a ToolMessage text, like the other tools.
+        args.to has exactly one address here (guard S12). The user's question goes along for tone (the email service
+        writes the email from args.content, not from the question). A failure returns an error outcome with a
+        ToolMessage text, like the other tools.
         """
         call = AgentCall(call_id=call_id, tool="draft_email", agent="email", input=args.model_dump(), status="error")
-        request = f"Email to {', '.join(args.to)}: {args.subject}"
         started = time.perf_counter()
         try:
-            coroutine = self.email_agent.ask(request, ctx.history, ctx.session_id, context=args.content)
+            coroutine = self.email_agent.draft(args.to[0], args.subject, args.content, request=ctx.question)
             result = await asyncio.wait_for(coroutine, self.limits.tool_timeout_seconds)
         except TimeoutError:
             result, call.error = None, self._timeout_text()
@@ -425,7 +440,10 @@ class AgentTools:
         started = time.perf_counter()
         try:
             draft_id = UUID(pending.draft["draft_id"])
-            coroutine = self.email_agent.resume(draft_id, decision.approved, decision.edited_body)
+            context_id = pending.draft.get("context_id")  # the A2A task's context (saved with the paused run)
+            coroutine = self.email_agent.resume(
+                draft_id, decision.approved, decision.edited_body, context_id=context_id
+            )
             result = await asyncio.wait_for(coroutine, self.limits.tool_timeout_seconds)
         except TimeoutError:
             result, error = None, self._timeout_text()
@@ -435,6 +453,8 @@ class AgentTools:
 
         if result is not None:
             call.result = result.model_dump(mode="json")
+            if call.result.get("draft") is None:  # a failure carries no draft: keep the one the user saw
+                call.result["draft"] = pending.draft
             if result.status == "completed":
                 call.status = "sent"
                 return ToolOutcome(call, f"Approved by the user and sent to {', '.join(result.draft.to)}.")

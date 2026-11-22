@@ -15,7 +15,7 @@ Path ids are typed (UUID, int), so FastAPI answers 422 for a malformed id before
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.chat.models import ApprovalResponse, ChatRequest, ChatResponse, MessagePage, RenameRequest, Session
 from app.chat.service import (
@@ -30,6 +30,7 @@ from app.chat.service import (
 from app.config import get_settings
 from app.dependencies import ChatStoreDep, InputGuardDep, OrchestratorDep
 from app.orchestrator.models import EmailDecision
+from app.ratelimit import rate_limit
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -43,7 +44,7 @@ ERROR_STATUS = {
 }
 
 
-@router.post("/chat")
+@router.post("/chat", dependencies=[Depends(rate_limit("questions"))])
 async def chat(
     body: ChatRequest, store: ChatStoreDep, guard: InputGuardDep, orchestrator: OrchestratorDep
 ) -> ChatResponse:
@@ -64,7 +65,7 @@ async def chat(
         raise HTTPException(ERROR_STATUS[type(error)], str(error)) from error
 
 
-@router.post("/messages/{message_id}/email-approval")
+@router.post("/messages/{message_id}/email-approval", dependencies=[Depends(rate_limit("questions"))])
 async def email_approval(
     message_id: int, body: EmailDecision, store: ChatStoreDep, orchestrator: OrchestratorDep
 ) -> ApprovalResponse:

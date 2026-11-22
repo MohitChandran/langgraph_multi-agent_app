@@ -23,7 +23,7 @@ and ask() returns status "awaiting_approval". Later, resume_email() continues th
 checkpoint with the human's decision. LangGraph re-runs the paused node from its first line on resume,
 so approval does nothing but interrupt(): drafting happens before it (tools), sending after it (send_email).
 
-Try it (real Groq, real DB agent, dummy web/email agents):
+Try it (real Groq and the real agents: DB, Doc with --session, web search over MCP, the email service when running):
     uv run python -m app.orchestrator.graph "hi, what can you do?"
     uv run python -m app.orchestrator.graph "Which vendors have overdue invoices?"
     uv run python -m app.orchestrator.graph "Which invoices are pending? Email them to accounts@company.example"
@@ -536,11 +536,12 @@ class Orchestrator:
         return SystemMessage(prompt)
 
     def _context(self, state: OrchestratorState, calls: list[AgentCall]) -> TurnContext:
-        """What the tool calls of this step share: the chat, its history, the next free citation labels."""
+        """What the tool calls of this step share: the chat, its history, the citation labels, the question."""
         return TurnContext(
             session_id=as_uuid(state.get("session_id")),
             history=[ConversationTurn(**turn) for turn in state.get("history", [])],
             next_labels=next_labels(calls),
+            question=state.get("question", ""),
         )
 
 
@@ -695,6 +696,7 @@ def email_summary(calls: list[AgentCall]) -> dict[str, Any] | None:
         "subject": draft.get("subject") or call.input.get("subject", ""),
         "body": draft.get("body") or call.input.get("content", ""),
         "message_id": result.get("message_id"),
+        "issues": draft.get("issues") or [],  # the email crew's reviewer notes, shown on the approval card
         "error": call.error,
     }
 
@@ -785,13 +787,15 @@ def ask_decision() -> EmailDecision:
 
 
 async def _main() -> None:
-    """CLI: run the orchestrator with the real DB (and Doc) agents and the dummy web/email agents."""
+    """CLI: run the orchestrator with the same agents as the API: DB, Doc (with --session), web search (DuckDuckGo
+    MCP server) and the email service (A2A, when it's running; otherwise draft_email isn't offered)."""
     from app.agents.db.database import ReadOnlyDatabase
     from app.agents.db.graph import DBAgent
     from app.agents.db.schema import load_schema
     from app.agents.doc.store import DocumentStore
-    from app.agents.email.dummy import DummyEmailAgent
-    from app.agents.web.dummy import DummyWebSearchAgent
+    from app.agents.email.a2a_agent import A2AEmailAgent
+    from app.agents.web.graph import WebSearchAgent
+    from app.agents.web.mcp import WebSearchMCP
     from app.chat.memory import load_history
     from app.chat.store import ChatStore
     from app.orchestrator.checkpoint import CheckpointStore
@@ -812,9 +816,17 @@ async def _main() -> None:
         documents = await stack.enter_async_context(DocumentStore(settings.app_database_url))
         chat_store = await stack.enter_async_context(ChatStore(settings.app_database_url))
         doc_agent = await _cli_doc_agent(documents) if args.session else None  # loading models takes a while
+        web_mcp = WebSearchMCP(settings)  # starts the DuckDuckGo MCP server (uvx), as the API's startup does
+        await web_mcp.start()
+        stack.push_async_callback(web_mcp.close)
+        web_agent = WebSearchAgent(
+            web_mcp, max_results=settings.web_max_results, snippet_chars=settings.web_snippet_chars
+        )
+        email_agent = A2AEmailAgent.from_settings(settings)
+        await email_agent.start()
+        stack.push_async_callback(email_agent.close)
         tools = AgentTools(
-            DBAgent(db, await load_schema(db)), doc_agent, DummyWebSearchAgent(settings.dummy_agent_delay_seconds),
-            DummyEmailAgent(settings.dummy_agent_delay_seconds), documents, limits,
+            DBAgent(db, await load_schema(db)), doc_agent, web_agent, email_agent, documents, limits,
         )  # fmt: skip
         checkpointer = None
         if args.postgres:

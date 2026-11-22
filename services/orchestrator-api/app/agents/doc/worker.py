@@ -47,6 +47,11 @@ class IngestionWorker:
         self._idle_seconds = idle_seconds
         self._task: asyncio.Task | None = None
 
+    @property
+    def running(self) -> bool:
+        """True while the worker's loop is alive (readiness check): started, not stopped, not crashed."""
+        return self._task is not None and not self._task.done()
+
     async def recover(self) -> None:
         """Startup clean-up after a crash or restart. Must run before start(), while no worker is active."""
         requeued, failed = await self._store.recover_interrupted()

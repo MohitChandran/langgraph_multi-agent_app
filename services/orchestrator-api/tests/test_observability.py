@@ -162,3 +162,26 @@ async def test_a_failing_model_call_is_an_error_generation(tracing: RecordingTra
     assert result.status == "passed"
     [prompt_guard] = tracing.named("prompt guard")
     assert prompt_guard.updates["level"] == "ERROR" and "timed out" in prompt_guard.updates["status_message"]
+
+
+def test_traceparent_is_the_current_observation_in_w3c_format() -> None:
+    """ "00-<trace id>-<observation id>-01" while an observation is current; None when off or nothing is current."""
+
+    class Client:
+        """Answers like the Langfuse client inside an observation (or outside one: None)."""
+
+        def __init__(self, trace_id: str | None, span_id: str | None) -> None:
+            """Fix the ids it reports."""
+            self.ids = (trace_id, span_id)
+
+        def get_current_trace_id(self) -> str | None:
+            """The current trace id."""
+            return self.ids[0]
+
+        def get_current_observation_id(self) -> str | None:
+            """The current observation (span) id."""
+            return self.ids[1]
+
+    assert Tracing(Client("a" * 32, "b" * 16), "pk").traceparent() == f"00-{'a' * 32}-{'b' * 16}-01"
+    assert Tracing(Client(None, None), "pk").traceparent() is None
+    assert Tracing().traceparent() is None

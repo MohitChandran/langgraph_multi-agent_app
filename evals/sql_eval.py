@@ -321,7 +321,7 @@ def main() -> None:
     if models.get("stopped"):
         missing = [case["id"] for case in cases if case["id"] not in by_id]
         print(f"Not run yet ({len(missing)}): {', '.join(missing)}. Nothing written; rerun with --retry-from.")
-        if args.retry_from is None and results:
+        if results:  # a retry's progress is kept too: the next --retry-from continues from here
             partial = REPORTS / f"sql-{date.today().isoformat()}-partial.json"
             partial.write_text(json.dumps({"cases": [asdict(r) for r in results]}, indent=2, default=str) + "\n")
             print(f"Partial results saved: {partial.relative_to(REPO)} (use it with --retry-from)")

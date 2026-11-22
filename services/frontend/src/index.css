@@ -1287,6 +1287,13 @@ summary.email-card-head {
   color: var(--text-muted);
 }
 
+/* The email crew's reviewer notes (plan 05): what it fixed or couldn't verify, read before approving. */
+.email-issues {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
 /* ---------- input guard (plan 04): a blocked message ---------- */
 
 .guard-refusal {

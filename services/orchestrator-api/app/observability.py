@@ -8,6 +8,8 @@ One chat turn becomes ONE trace in Langfuse (self-hosted, docker-compose.langfus
       │    └─ safety model             a generation: the Groq model, its tokens
       └─ orchestrator                  the LangGraph run: every node, every LLM call with its tokens
            └─ tools → the DB / Doc / Web agents' own graphs, the MCP search tool
+      └─ email service: draft          the A2A call; the email service's own spans (checks, crew, SMTP) continue
+                                       this trace there: traceparent() travels in the A2A message
 
 How it fits together: the Langfuse SDK is built on OpenTelemetry. trace() and span() open an observation and
 make it the CURRENT one (a contextvar, like the guard's trace), so everything started inside nests under it.
@@ -103,6 +105,16 @@ class Tracing:
         extra = {"model": model} if model else {}
         with self.client.start_as_current_observation(name=name, as_type=as_type, input=input, **extra) as observation:
             yield observation
+
+    def traceparent(self) -> str | None:
+        """The current observation as a W3C traceparent ("00-<trace id>-<span id>-01"), or None (off / none current).
+
+        Sent to the email service inside the A2A message (plan 05 + tracing), so its spans continue THIS trace.
+        """
+        if not self.enabled:
+            return None
+        trace_id, span_id = self.client.get_current_trace_id(), self.client.get_current_observation_id()
+        return f"00-{trace_id}-{span_id}-01" if trace_id and span_id else None
 
     def callbacks(self) -> list[Any]:
         """The LangChain callback handler for a graph run's config (empty when tracing is off)."""

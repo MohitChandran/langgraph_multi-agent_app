@@ -16,49 +16,17 @@ Try it:  uv run python -m app.agents.email.dummy "Email a summary of pending inv
 import asyncio
 import re
 import sys
-from typing import Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
-
+from app.agents.email.models import EmailAgentResult, EmailDraft
 from app.chat.memory import ConversationTurn
 
 DEFAULT_RECIPIENT = "accounts@company.example"  # reserved .example domain: can never reach a real inbox
 EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 
 
-class EmailDraft(BaseModel):
-    """An email waiting for approval: exactly what the UI's approval card shows."""
-
-    draft_id: UUID
-    to: list[str]
-    subject: str
-    body: str
-
-
-class EmailAgentResult(BaseModel):
-    """What the email agent returns. The core fields match the other agents' results.
-
-    status follows the A2A task states:
-      input_required - a draft exists and needs a human decision (needs_approval = True)
-      completed      - approved and "sent" (message_id is set)
-      rejected       - the human said no; nothing was sent
-    """
-
-    question: str
-    answer: str
-    success: bool
-    status: Literal["input_required", "completed", "rejected"]
-    needs_approval: bool
-    draft: EmailDraft | None = None
-    message_id: str | None = None
-    steps: list[str] = Field(default_factory=list, description="Workflow steps in the order they ran.")
-    reasoning: list[str] = Field(default_factory=list, description="Short sentences on what the agent did and why.")
-    error: str | None = None
-
-
 class DummyEmailAgent:
-    """Stand-in for the email agent: same `name` + async `ask` as the others, plus `resume` for the decision.
+    """Stand-in for the email agent: the same draft() / resume() as A2AEmailAgent, without any service.
 
     Drafts are kept in memory (a dict) between ask() and resume(); the real agent keeps them in its own
     service. `delay_seconds` simulates a slow agent, like DummyWebSearchAgent.
@@ -107,8 +75,14 @@ class DummyEmailAgent:
             reasoning=["Dummy agent: built a hardcoded draft. It waits for a human decision; nothing was sent."],
         )
 
-    async def resume(self, draft_id: UUID, approved: bool, edited_body: str | None = None) -> EmailAgentResult:
-        """Apply the human's decision to a draft: approve ("send" it) or reject it.
+    async def draft(self, to: str, subject: str, content: str, *, request: str = "") -> EmailAgentResult:
+        """The orchestrator's call (same signature as A2AEmailAgent.draft): a dummy draft to `to` with `content`."""
+        return await self.ask(f"Email to {to}: {subject}", context=content)
+
+    async def resume(
+        self, draft_id: UUID, approved: bool, edited_body: str | None = None, *, context_id: str | None = None
+    ) -> EmailAgentResult:
+        """Apply the human's decision to a draft: approve ("send" it) or reject it. context_id is ignored.
 
         `edited_body` replaces the body before sending (the UI's Edit button). Each draft can be decided
         once; an unknown or already-decided draft returns success=False with an error, it never raises.

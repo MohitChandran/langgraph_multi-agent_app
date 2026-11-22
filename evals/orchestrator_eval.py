@@ -5,13 +5,15 @@ For every case in evals/datasets/orchestrator.json:
   2. ask the earlier questions (memory), then the case's question, through POST /api/chat;
   3. score the saved answer: which tools ran, which were refused, whether an email was drafted,
      whether the limits held (score_case);
-  4. reject any email draft (nothing is left waiting; this also exercises the resume path), and
-     delete the chat.
+  4. decide any email draft: reject it (the default: nothing is left waiting, and the resume path runs), or what
+     the case says (approve, approve an edited body, approve twice); count the emails that really left in Mailpit;
+     then delete the chat.
 
 The app runs INSIDE this process with its real startup (app.router.lifespan_context: DB agent, Doc
 agent, ingestion worker, Postgres checkpointer, orchestrator) and is called over HTTP through
-httpx's ASGI transport: exactly the path the UI takes, without starting a server. The web and email
-agents are the dummies. Needs the local Postgres and Groq.
+httpx's ASGI transport: exactly the path the UI takes, without starting a server. The web agent searches
+DuckDuckGo (MCP); the email agent is the email service over A2A (plan 05), which must be running on
+EMAIL_AGENT_URL, with Mailpit catching what it sends. Needs the local Postgres, Mailpit and Groq.
 
 Run from the repo root:
     uv run --project services/orchestrator-api python evals/orchestrator_eval.py
@@ -46,6 +48,8 @@ from app.agents.web.query_guard import rejected_reason  # noqa: E402
 from app.orchestrator.models import Limits  # noqa: E402
 
 DATASET = DATASETS / "orchestrator.json"
+MAILPIT_API = "http://localhost:8025/api/v1"  # the development inbox: every email the service sends lands here
+REJECT = {"approved": False}
 EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 LIMIT_STOPS = ("tool_budget", "supervisor_limit")
 DOCUMENT_TIMEOUT_SECONDS = 180
@@ -70,6 +74,12 @@ class Case:
     call_input_contains: dict[str, str] = field(default_factory=dict)
     documents: list[str] = field(default_factory=list)  # keys of the dataset's "documents"
     previous: list[str] = field(default_factory=list)  # asked first, in the same chat
+    # Plan 05: what to do with the draft (None = reject it), and what must follow.
+    decision: dict[str, Any] | None = None  # e.g. {"approved": true, "edited_body": "..."}
+    decide_twice: bool = False  # send the decision a second time: it must be refused (409)
+    expect_after_decision: str | None = None  # "<answer status>/<email status>", e.g. "complete/sent"
+    expect_emails_sent: int | None = None  # emails that really left (counted in Mailpit); None = not checked
+    expect_email_error: str | None = None  # text the draft_email call's error must contain (the service refused)
     note: str = ""
 
     @classmethod
@@ -89,6 +99,11 @@ class Case:
             call_input_contains=raw.get("call_input_contains", {}),
             documents=setup.get("documents", []),
             previous=setup.get("previous", []),
+            decision=raw.get("decision"),
+            decide_twice=raw.get("decide_twice", False),
+            expect_after_decision=raw.get("expect_after_decision"),
+            expect_emails_sent=raw.get("expect_emails_sent"),
+            expect_email_error=raw.get("expect_email_error"),
             note=raw.get("note", ""),
         )
 
@@ -125,7 +140,8 @@ class CaseResult:
     supervisor_calls: int
     latency_ms: int
     answer: str
-    after_reject: str = ""  # for a drafted email: what the answer became after rejecting it
+    after_decision: str = ""  # for a drafted email: "<answer status>/<email status>" after the decision
+    emails_sent: int | None = None  # emails that left during the case (Mailpit); None = not counted
 
 
 def check_invariants(calls: list[dict], result: dict, user_texts: list[str], limits: Limits) -> list[str]:
@@ -209,6 +225,10 @@ def score_case(case: Case, message: dict, limits: Limits) -> CaseResult:
         failures.append(f"unexpected refusals: {'; '.join(refused)}")
     if case.expect_clarifying and "?" not in message["content"]:
         failures.append("expected a clarifying question")
+    if case.expect_email_error:
+        errors = [call.get("error") or "" for call in executed_calls if call["tool"] == "draft_email"]
+        if not any(case.expect_email_error.lower() in error.lower() for error in errors):
+            failures.append(f"expected the email service to refuse with {case.expect_email_error!r}; got {errors}")
     for tool, text in case.call_input_contains.items():
         inputs = [json.dumps(call["input"]).lower() for call in executed_calls if call["tool"] == tool]
         if not any(text.lower() in value for value in inputs):
@@ -278,6 +298,7 @@ async def run_case(
 ) -> CaseResult:
     """Run one case in its own chat and score it; the chat is deleted afterwards unless `keep`."""
     session_id = None
+    sent_before = await mailpit_count()
     try:
         for key in case.documents:
             session_id = await upload(http, documents[key], session_id)
@@ -286,14 +307,37 @@ async def run_case(
         for question in case.previous:
             turn = await chat(http, question, session_id)
             session_id = turn["session"]["id"]
-            await reject_if_waiting(http, turn["assistant_message"])
+            await decide_if_waiting(http, turn["assistant_message"], REJECT)
         turn = await chat(http, case.question, session_id)
         session_id = turn["session"]["id"]
         message = turn["assistant_message"]
         result = score_case(case, message, limits)
-        result.after_reject = await reject_if_waiting(http, message)
-        if result.after_reject and result.after_reject != "complete/rejected":
-            result.failures.append(f"rejecting the draft did not finish the answer ({result.after_reject})")
+        decision = case.decision or REJECT
+        result.after_decision = await decide_if_waiting(http, message, decision)
+        problems = []  # what the decision and Mailpit show (on top of score_case's checks)
+        expected = case.expect_after_decision or ("complete/rejected" if case.decision is None else None)
+        if result.after_decision and expected and result.after_decision != expected:
+            problems.append(f"after the decision the answer was {result.after_decision}, expected {expected}")
+        if case.decide_twice and result.after_decision:
+            again = await http.post(f"/api/messages/{message['id']}/email-approval", json=decision)
+            if again.status_code != 409:
+                problems.append(f"a second decision was not refused (HTTP {again.status_code})")
+        sent_after = await mailpit_count()
+        if sent_before is not None and sent_after is not None:
+            result.emails_sent = sent_after - sent_before
+        # Nothing may leave unless the case approves: a rejected (or never drafted) email sends 0.
+        expected_sent = (
+            case.expect_emails_sent if case.expect_emails_sent is not None else (0 if case.decision is None else None)
+        )
+        if (
+            expected_sent is not None
+            and result.emails_sent != expected_sent
+            and (result.emails_sent is not None or case.expect_emails_sent is not None)
+        ):
+            got = "unknown (Mailpit not reachable)" if result.emails_sent is None else result.emails_sent
+            problems.append(f"{got} emails left the system, expected {expected_sent}")
+        if problems:
+            result.failures += problems
             result.passed = False
         return result
     except Exception as error:  # noqa: BLE001  (one broken case must not stop the run)
@@ -311,15 +355,25 @@ async def chat(http: httpx.AsyncClient, question: str, session_id: str | None) -
     return response.json()
 
 
-async def reject_if_waiting(http: httpx.AsyncClient, message: dict) -> str:
-    """Reject an answer's email draft if it waits for approval. Returns "<status>/<email status>", or ""."""
+async def decide_if_waiting(http: httpx.AsyncClient, message: dict, decision: dict[str, Any]) -> str:
+    """Send the decision if the answer's email draft waits for approval. Returns "<status>/<email status>", or ""."""
     if message["status"] != "awaiting_approval":
         return ""
-    response = await http.post(f"/api/messages/{message['id']}/email-approval", json={"approved": False})
+    response = await http.post(f"/api/messages/{message['id']}/email-approval", json=decision)
     response.raise_for_status()
     final = response.json()["assistant_message"]
     email = ((final.get("payload") or {}).get("result") or {}).get("email") or {}
     return f"{final['status']}/{email.get('status')}"
+
+
+async def mailpit_count() -> int | None:
+    """How many emails Mailpit holds (each one really left the email service), or None if it can't be reached."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            response = await client.get(f"{MAILPIT_API}/messages", params={"limit": 1})
+            return int(response.json()["messages_count"])
+    except (httpx.HTTPError, KeyError, ValueError):
+        return None
 
 
 async def upload(http: httpx.AsyncClient, path: Path, session_id: str | None) -> str:
@@ -363,6 +417,12 @@ async def run(cases: list[Case], documents: dict[str, Path], pause: float, keep:
     # flush=True: progress shows up at once even when the output goes to a file (a background run)
     print(f"Starting the app (model {settings.groq_orchestrator_model}); {len(cases)} cases.", flush=True)
     async with app.router.lifespan_context(app):
+        if not getattr(app.state.orchestrator.tools.email_agent, "available", True):
+            print(
+                "WARNING: the email service is not reachable: draft_email is not offered, email cases will fail. "
+                "Start it: cd services/email-a2a-service && uv run uvicorn app.main:app --port 8001",
+                flush=True,
+            )
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://eval", timeout=300) as http:
             for number, case in enumerate(cases, start=1):
@@ -394,6 +454,15 @@ def write_report(results: list[CaseResult], meta: dict[str, Any], out_dir: Path 
     return stem.with_suffix(".md")
 
 
+def email_cell(r: CaseResult) -> str:
+    """The report's Email column: what happened to the draft, and how many emails really left."""
+    if not r.drafted:
+        return ""
+    outcome = r.after_decision.split("/")[-1] if r.after_decision else "no draft (refused)"
+    sent = f", {r.emails_sent} sent" if r.emails_sent else ""
+    return f"draft → {outcome}{sent}"
+
+
 def render_markdown(results: list[CaseResult], summary: dict[str, Any], meta: dict[str, Any]) -> str:
     """The human-readable report: summary metrics, per category, per case, then each failure explained."""
     s = summary
@@ -402,7 +471,8 @@ def render_markdown(results: list[CaseResult], summary: dict[str, Any], meta: di
         "",
         f"Supervisor model `{meta['model']}` · commit `{meta['commit']}` · {s['cases']} cases · "
         f"limits: {meta['limits']} · run time {meta['minutes']} min. Input guard (NeMo) in front; real DB, Doc and "
-        "Web (DuckDuckGo MCP) agents; dummy email agent. Dataset: `evals/datasets/orchestrator.json`; how it's "
+        "Web (DuckDuckGo MCP) agents; the email service over A2A (CrewAI, Mailpit). Dataset: "
+        "`evals/datasets/orchestrator.json`; how it's "
         "scored: `evals/orchestrator_eval.py`.",
         "",
         "## Summary",
@@ -438,7 +508,7 @@ def render_markdown(results: list[CaseResult], summary: dict[str, Any], meta: di
             f"| {r.id} | {'✅' if r.passed else '❌'} | {guard} | "
             f"{' + '.join(r.expected) or '(none)'} | "
             f"{' → '.join(r.executed) or '(none)'} | {len(r.refused) or ''} | "
-            f"{'draft → ' + r.after_reject.split('/')[-1] if r.drafted else ''} | {r.stop_reason or ''} | "
+            f"{email_cell(r)} | {r.stop_reason or ''} | "
             f"{r.supervisor_calls} | {r.latency_ms / 1000:.1f} s |"
         )
     failed = [r for r in results if r.failures or r.invariant_failures or r.refused]

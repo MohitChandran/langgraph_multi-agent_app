@@ -112,3 +112,25 @@ async def test_fail_stale_pending_never_touches_answers_awaiting_approval(chat_s
         assert (await chat_store.get_message(answer.id))[1].status == "awaiting_approval"
     finally:
         await chat_store.delete_session(session.id)
+
+
+def test_nul_characters_are_removed_before_saving() -> None:
+    """Postgres can't store NUL in TEXT/JSONB: without_nul cleans strings anywhere in a payload (plan 05 eval find)."""
+    from app.chat.store import without_nul
+
+    payload = {"email": {"subject": "Due (Nov 16\x0021)", "to": ["a@b.example"]}, "n": 3, "list": ["x\x00y", None]}
+    assert without_nul(payload) == {"email": {"subject": "Due (Nov 1621)", "to": ["a@b.example"]}, "n": 3,
+                                    "list": ["xy", None]}  # fmt: skip
+    assert without_nul("a\x00b") == "ab" and without_nul(None) is None
+
+
+@pytest.mark.integration
+async def test_an_answer_with_a_nul_character_is_saved(chat_store) -> None:  # noqa: ANN001
+    """The bug the eval found: a NUL inside the payload no longer fails complete_message."""
+    session = await chat_store.create_session("[pytest] nul")
+    try:
+        _, pending = await chat_store.add_turn(session.id, "question\x00")
+        saved = await chat_store.complete_message(pending.id, "answer\x00", {"subject": "a\x00b"}, 5)
+        assert saved.content == "answer" and saved.payload == {"subject": "ab"}
+    finally:
+        await chat_store.delete_session(session.id)

@@ -5,10 +5,15 @@ when they're run from the repo root:
     uv run --project services/orchestrator-api python evals/<script>.py
 """
 
+import os
 import statistics
 import subprocess
 import sys
 from pathlib import Path
+
+# The evals call the in-process API dozens of times in a row from one "client" on purpose: the per-client request
+# limits (app/ratelimit.py) protect against outside clients, not against the evals. Read once, at the app's startup.
+os.environ.setdefault("RATE_LIMIT_ENABLED", "false")
 
 REPO = Path(__file__).resolve().parents[1]
 REPORTS = REPO / "evals" / "reports"

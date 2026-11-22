@@ -28,6 +28,23 @@ from psycopg_pool import AsyncConnectionPool
 
 from app.chat.models import Message, MessagePage, Session
 
+
+def without_nul(value: Any) -> Any:
+    """The value with every NUL character removed (strings inside dicts and lists too).
+
+    Postgres can't store "\x00" in TEXT or JSONB ("unsupported Unicode escape sequence"), and agent output can
+    contain one (an LLM's odd character, a web page, a document): without this, one NUL fails the whole answer.
+    Found in the plan 05 eval: an email subject came back with "\u0000" where a dash should have been.
+    """
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, dict):
+        return {key: without_nul(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [without_nul(item) for item in value]
+    return value
+
+
 # Table names are always written schema-qualified (app.chat_sessions), even though app_rw's
 # search_path is `app`: if the code were ever pointed at the wrong user, tables could then
 # never be created silently in `public`, where the DB agent could read them.
@@ -176,7 +193,7 @@ class ChatStore:
     async def create_session(self, title: str) -> Session:
         """Insert a new, empty conversation and return it. Postgres generates the UUID."""
         row = await self.fetch_one(
-            f"INSERT INTO app.chat_sessions (title) VALUES (%s) RETURNING {SESSION_COLUMNS}", (title,)
+            f"INSERT INTO app.chat_sessions (title) VALUES (%s) RETURNING {SESSION_COLUMNS}", (without_nul(title),)
         )
         return Session(**row)
 
@@ -258,7 +275,7 @@ class ChatStore:
                 await conn.execute(
                     f"INSERT INTO app.chat_messages (session_id, role, content) VALUES (%s, 'user', %s)"
                     f" RETURNING {MESSAGE_COLUMNS}",
-                    (session_id, question),
+                    (session_id, without_nul(question)),
                 )
             ).fetchone()
             assistant = await (
@@ -284,7 +301,7 @@ class ChatStore:
         row = await self.fetch_one(
             f"UPDATE app.chat_messages SET content = %s, payload = %s, latency_ms = %s, status = 'complete'"
             f" WHERE id = %s RETURNING {MESSAGE_COLUMNS}",
-            (content, Jsonb(payload), latency_ms, message_id),
+            (without_nul(content), Jsonb(without_nul(payload)), latency_ms, message_id),
         )
         return Message(**row) if row else None
 
@@ -293,7 +310,7 @@ class ChatStore:
         row = await self.fetch_one(
             f"UPDATE app.chat_messages SET content = %s, latency_ms = %s, status = 'error'"
             f" WHERE id = %s RETURNING {MESSAGE_COLUMNS}",
-            (content, latency_ms, message_id),
+            (without_nul(content), latency_ms, message_id),
         )
         return Message(**row) if row else None
 
@@ -308,7 +325,7 @@ class ChatStore:
         row = await self.fetch_one(
             f"UPDATE app.chat_messages SET content = %s, payload = %s, latency_ms = %s, status = 'awaiting_approval'"
             f" WHERE id = %s RETURNING {MESSAGE_COLUMNS}",
-            (content, Jsonb(payload), latency_ms, message_id),
+            (without_nul(content), Jsonb(without_nul(payload)), latency_ms, message_id),
         )
         return Message(**row) if row else None
 

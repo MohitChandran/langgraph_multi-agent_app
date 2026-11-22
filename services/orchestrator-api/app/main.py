@@ -7,7 +7,10 @@ Endpoints:
   - /api/documents/...            document upload, status, files (app/documents/routes.py)
   - POST /api/db/ask              one-off question to the DB agent, nothing saved (CLI, debugging, evals);
                                   checked by the input guard first, like every chat message
-  - GET /api/health               liveness check
+  - GET /api/health               liveness check (the process is up)
+  - GET /api/health/ready         readiness: databases, worker, web search, email service... (app/health.py)
+
+Questions (chat, email decisions, /api/db/ask) and uploads are rate limited per client (app/ratelimit.py): 429.
 
 Run it (from services/orchestrator-api):
     uv run uvicorn app.main:app --reload --port 8000
@@ -21,7 +24,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from functools import partial
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from app.agents.db.database import ReadOnlyDatabase
@@ -38,21 +41,23 @@ from app.agents.doc.retrieval import Retriever
 from app.agents.doc.store import DocumentStore
 from app.agents.doc.vision import VISION_MAX_TOKENS, describe_picture
 from app.agents.doc.worker import IngestionWorker
-from app.agents.email.dummy import DummyEmailAgent
+from app.agents.email.a2a_agent import A2AEmailAgent
 from app.agents.web.graph import WebSearchAgent
 from app.agents.web.mcp import WebSearchMCP
 from app.chat.routes import router as chat_router
 from app.chat.store import ChatStore
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.dependencies import DBAgentDep, InputGuardDep
 from app.documents.routes import router as documents_router
 from app.guardrails.guard import InputGuard
+from app.health import Check, Off, readiness
 from app.llm import get_llm
 from app.observability import get_tracing, setup_tracing
 from app.orchestrator.checkpoint import CheckpointStore
 from app.orchestrator.graph import Orchestrator
 from app.orchestrator.models import Limits
 from app.orchestrator.tools import AgentTools
+from app.ratelimit import RateLimiter, rate_limit
 
 # Uvicorn only configures its own loggers; without this, messages from our app.* modules are dropped.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s - %(message)s")
@@ -71,8 +76,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
       4. load the document models ONCE (embedder, reranker, tokenizer, Docling converter; plan
          gotcha 6), build the Doc agent
       5. build the input guard (plan 04: NeMo Guardrails, its own Groq models) and the orchestrator
-         (plan 03): the agents as tools (the web agent searches DuckDuckGo through its MCP server; email
-         is still a dummy), the
+         (plan 03): the agents as tools (the web agent searches DuckDuckGo through its MCP server; the email
+         agent is the separate email service, reached over A2A, plan 05), the
          Postgres checkpointer for paused email approvals, minus checkpoints nobody can approve any
          more (app.state.orchestrator)
       6. recover interrupted documents and start the ingestion worker
@@ -129,13 +134,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             web_mcp, max_results=settings.web_max_results, snippet_chars=settings.web_snippet_chars
         )
 
-        # The orchestrator calls the agents above as tools. Email is still a dummy until Phase 5 builds the real
-        # one (A2A); only that line changes then.
+        # The email agent is another service too (services/email-a2a-service, CrewAI), reached over A2A (plan 05).
+        # If it isn't reachable now, the app still starts and the orchestrator doesn't offer draft_email.
+        email_agent = A2AEmailAgent.from_settings(settings)
+        await email_agent.start()
+        stack.push_async_callback(email_agent.close)
+
+        # The orchestrator calls the agents above as tools.
         tools = AgentTools(
             app.state.db_agent,
             app.state.doc_agent,
             web_agent,
-            DummyEmailAgent(settings.dummy_agent_delay_seconds),
+            email_agent,
             document_store,
             Limits.from_settings(settings),
         )
@@ -158,7 +168,77 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         stack.push_async_callback(worker.stop)  # registered after the pools -> runs BEFORE they close
         logger.info("Ingestion worker started")
 
+        app.state.readiness_checks = _readiness_checks(db, chat_store, worker, web_mcp, email_agent, settings)
+        # Per-client limits on questions and uploads (app/ratelimit.py); None = off (RATE_LIMIT_ENABLED=false).
+        app.state.rate_limiter = RateLimiter.from_settings(settings) if settings.rate_limit_enabled else None
+        if app.state.rate_limiter is None:
+            logger.warning("RATE_LIMIT_ENABLED=false: requests are not rate limited")
+
         yield
+
+
+def _readiness_checks(
+    db: ReadOnlyDatabase,
+    chat_store: ChatStore,
+    worker: IngestionWorker,
+    web_mcp: WebSearchMCP,
+    email_agent: A2AEmailAgent,
+    settings: Settings,
+) -> list[Check]:
+    """What GET /api/health/ready probes. Required: the two database roles (no question works without them)."""
+
+    async def database_readonly() -> str:
+        """The DB agent's read-only pool answers."""
+        await db.fetch_trusted("SELECT 1")
+        return "readonly_agent"
+
+    async def database_app() -> str:
+        """The chats/documents/checkpoints pool answers."""
+        await chat_store.fetch_one("SELECT 1")
+        return "app_rw"
+
+    async def ingestion_worker() -> str:
+        """The document queue's worker loop is alive."""
+        if not worker.running:
+            raise RuntimeError("the worker loop is not running: uploaded documents won't be processed")
+        return "running"
+
+    async def web_search() -> str:
+        """The DuckDuckGo MCP server's session is open (search_web is offered only then)."""
+        if not web_mcp.available:
+            raise RuntimeError("the DuckDuckGo MCP server is not running: search_web is not offered")
+        return "DuckDuckGo MCP server"
+
+    async def email_service() -> str:
+        """The email service answers (and draft_email comes back if it was down)."""
+        if not settings.email_agent_api_key.get_secret_value():
+            raise Off("EMAIL_AGENT_API_KEY is not set: draft_email is not offered")
+        return await email_agent.check()
+
+    async def tracing() -> str:
+        """Langfuse accepts our keys (auth_check is a blocking HTTP call: in a thread)."""
+        client = get_tracing().client
+        if client is None:
+            raise Off("no Langfuse keys")
+        if not await asyncio.to_thread(client.auth_check):
+            raise RuntimeError("Langfuse rejected the keys")
+        return settings.langfuse_base_url
+
+    async def input_guard() -> str:
+        """The input guard is on (its checks call Groq, so they are not probed here)."""
+        if not settings.guard_enabled:
+            raise Off("GUARD_ENABLED=false: messages are NOT checked")
+        return "NeMo Guardrails input rails"
+
+    return [
+        Check("database (read-only, DB agent)", True, database_readonly),
+        Check("database (chats, documents)", True, database_app),
+        Check("ingestion worker", False, ingestion_worker),
+        Check("web search", False, web_search),
+        Check("email service", False, email_service),
+        Check("tracing (Langfuse)", False, tracing),
+        Check("input guard", False, input_guard),
+    ]
 
 
 def _ingest_deps(store: DocumentStore, embedder: Embedder, counter: TokenCounter) -> IngestDeps:
@@ -198,11 +278,20 @@ class AskRequest(BaseModel):
 
 @app.get("/api/health")
 async def health() -> dict[str, str]:
-    """Liveness check: lets the UI (or Docker later) see that the API is up."""
+    """Liveness check: the process is up (says nothing about its dependencies; see /api/health/ready)."""
     return {"status": "ok"}
 
 
-@app.post("/api/db/ask")
+@app.get("/api/health/ready")
+async def ready(response: Response) -> dict:
+    """Readiness: every dependency probed now. 200 when ready or degraded, 503 when a required part is down."""
+    status, checks = await readiness(getattr(app.state, "readiness_checks", []))
+    if status == "not_ready":
+        response.status_code = 503
+    return {"status": status, "checks": checks}
+
+
+@app.post("/api/db/ask", dependencies=[Depends(rate_limit("questions"))])
 async def ask_db(body: AskRequest, guard: InputGuardDep, agent: DBAgentDep) -> DBAgentResult:
     """Run the DB agent on one question, with no chat and no memory (for the CLI, debugging and evals).
 

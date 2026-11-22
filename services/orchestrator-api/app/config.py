@@ -32,8 +32,8 @@ class Settings(BaseSettings):
     # --- LLM (Groq) ---
     # SecretStr hides the value in logs and reprs: print(settings) shows '**********'.
     groq_api_key: SecretStr
-    groq_strong_model: str = "llama-3.3-70b-versatile"  # routing, SQL generation
-    groq_fast_model: str = "llama-3.1-8b-instant"  # cheap steps: summaries, rewrites
+    groq_strong_model: str = "openai/gpt-oss-20b"  # SQL generation, document and web answers
+    groq_fast_model: str = "qwen/qwen3.8-27b"  # cheap steps: summaries, rewrites, the DB agent's answer
     llm_max_retries: int = 3  # retries with exponential backoff on 429 / 5xx errors
     llm_timeout_seconds: float = 60.0
 
@@ -76,7 +76,6 @@ class Settings(BaseSettings):
     orch_tool_result_chars: int = 2000  # cap on the text a tool result sends back to the supervisor
     orch_max_email_recipients: int = 1  # S12: one recipient per email (plan 04, decision 6)
     orch_supervisor_max_tokens: int = 1200  # S20: Groq limits output tokens per minute
-    dummy_agent_delay_seconds: float = 0.0  # e.g. 1.0 to watch the dummy web/email agents "work"
 
     # --- Input guardrail (NeMo Guardrails), plan 04 section 10 ---
     # Every chat message (and /api/db/ask) is checked BEFORE the orchestrator sees it. The guard uses its own small
@@ -91,12 +90,29 @@ class Settings(BaseSettings):
     # The server runs as its own process via `uvx --from <package>`: never add it to pyproject.toml (its `mcp` 2.x
     # conflicts with langchain-mcp-adapters' `mcp` 1.x).
     web_mcp_package: str = "duckduckgo-mcp-server==0.7.0"
+    # "uvx" = download/run web_mcp_package on demand (local runs). Anything else = an installed server binary, run as is
+    # (the Docker image installs it at build time and sets WEB_MCP_COMMAND=duckduckgo-mcp-server: no download at start).
+    web_mcp_command: str = "uvx"
     web_safe_search: str = "STRICT"  # DuckDuckGo SafeSearch: STRICT | MODERATE | OFF
     web_region: str = "wt-wt"  # "wt-wt" = no region
     web_max_results: int = 6
     web_search_rpm: int = 20  # the server's own rate limit (searches per minute)
     web_search_timeout_seconds: float = 20.0
     web_snippet_chars: int = 400  # each result's snippet is cut to this before it reaches the answer LLM
+
+    # --- Request rate limits per client (app/ratelimit.py). 0 switches one rule off; RATE_LIMIT_ENABLED=false all. ---
+    # "Questions" = chat messages, email decisions and /api/db/ask: each runs the guard and agents (Groq tokens).
+    rate_limit_enabled: bool = True
+    rate_limit_questions_per_minute: int = 6
+    rate_limit_questions_per_day: int = 150
+    rate_limit_uploads_per_hour: int = 20
+
+    # --- Email agent (plan 05): the separate email service (services/email-a2a-service), reached over A2A ---
+    # Without the API key (the SAME value as the service's EMAIL_SERVICE_API_KEY) draft_email is not offered.
+    email_agent_url: str = "http://localhost:8001"
+    email_agent_api_key: SecretStr = SecretStr("")
+    email_draft_timeout_seconds: float = 120.0  # message #1: the CrewAI crew writes the draft
+    email_decision_timeout_seconds: float = 45.0  # message #2: checks + SMTP send
 
     # --- Tracing (Langfuse, self-hosted with docker-compose.langfuse.yml), project plan Phase 2 / 3-G ---
     # Both keys empty = tracing off: nothing is sent anywhere (tests, CI, a machine without Langfuse).

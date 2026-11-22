@@ -47,6 +47,7 @@ class RunNames(BaseCallbackHandler):
 
 
 _current: ContextVar[RecordedObservation | None] = ContextVar("recorded_current", default=None)
+FAKE_TRACEPARENT = "00-" + "a" * 32 + "-" + "b" * 16 + "-01"
 
 
 class RecordingTracing(Tracing):
@@ -85,6 +86,10 @@ class RecordingTracing(Tracing):
         """Record a span of the given type (input, model in attrs)."""
         with self._open(as_type, name, attrs) as observation:
             yield observation
+
+    def traceparent(self) -> str | None:
+        """A fixed traceparent: lets tests check it is passed on (e.g. to the email service)."""
+        return FAKE_TRACEPARENT
 
     def callbacks(self) -> list[Any]:
         """The run-name recorder, where the app would put Langfuse's handler."""

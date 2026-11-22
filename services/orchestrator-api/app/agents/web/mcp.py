@@ -50,20 +50,22 @@ class WebSearchUnavailableError(RuntimeError):
 
 
 def server_config(settings: Settings) -> dict[str, Any]:
-    """How to start the DuckDuckGo MCP server: a stdio process launched with uvx, pinned, with our settings.
+    """How to start the DuckDuckGo MCP server: a stdio process, launched with uvx (pinned) or as an installed binary
+    (WEB_MCP_COMMAND, the Docker image), with our settings.
 
     --ref-url-threshold 100000: the server would replace long URLs with ref:// tokens; we want the real URLs,
     so citations are real links. SafeSearch and region come from the environment (DDG_SAFE_SEARCH, DDG_REGION).
     PATH is passed so the child process finds uvx (the MCP client doesn't inherit the whole environment).
     """
+    flags = ["--ref-url-threshold", "100000", "--search-rpm", str(settings.web_search_rpm)]
+    if settings.web_mcp_command == "uvx":
+        command, args = "uvx", ["--from", settings.web_mcp_package, "duckduckgo-mcp-server", *flags]
+    else:  # an installed server (the Docker image): run it directly
+        command, args = settings.web_mcp_command, flags
     return {
         "transport": "stdio",
-        "command": "uvx",
-        "args": [
-            "--from", settings.web_mcp_package, "duckduckgo-mcp-server",
-            "--ref-url-threshold", "100000",
-            "--search-rpm", str(settings.web_search_rpm),
-        ],
+        "command": command,
+        "args": args,
         "env": {
             "DDG_SAFE_SEARCH": settings.web_safe_search,
             "DDG_REGION": settings.web_region,

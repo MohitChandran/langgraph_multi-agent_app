@@ -19,7 +19,7 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 import psycopg
-from fastapi import APIRouter, Form, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -37,6 +37,7 @@ from app.documents.files import (
     find_original,
     save_original,
 )
+from app.ratelimit import rate_limit
 
 router = APIRouter(prefix="/api", tags=["documents"])
 
@@ -52,7 +53,7 @@ class UploadResponse(BaseModel):
     document: Document
 
 
-@router.post("/documents", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/documents", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(rate_limit("uploads"))])
 async def upload_document(
     file: UploadFile,
     chat_store: ChatStoreDep,

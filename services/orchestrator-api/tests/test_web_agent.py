@@ -226,3 +226,11 @@ async def test_the_real_server_starts_keeps_only_search_and_answers() -> None:
         assert mcp.available and set(mcp.server_tools) >= {"search", "fetch_content", "expand_link"}
         sources = parse_results(await mcp.search("Battle of Gaugamela", 3))
     assert sources and all(s.url.startswith("http") for s in sources)
+
+
+def test_an_installed_server_runs_directly() -> None:
+    """WEB_MCP_COMMAND set (the Docker image): that binary with the same flags, no uvx, no --from."""
+    settings = get_settings().model_copy(update={"web_mcp_command": "duckduckgo-mcp-server"})
+    config = server_config(settings)
+    assert config["command"] == "duckduckgo-mcp-server" and "--from" not in config["args"]
+    assert config["args"][:2] == ["--ref-url-threshold", "100000"]
