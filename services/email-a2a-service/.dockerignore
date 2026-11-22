@@ -1,0 +1,8 @@
+# Secrets never go into an image: compose passes this service's .env in at run time.
+.env
+.venv/
+tests/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/

@@ -1,7 +1,12 @@
-# Local infrastructure. Start everything with:  docker compose up -d
+# Local infrastructure, and (profile "app") the whole platform in containers.
 # Values like ${POSTGRES_USER} are read from the .env file next to this file.
 #
-# Langfuse (tracing) is added in Phase 2, when we start tracing the graph.
+#   docker compose up -d                          Postgres + Mailpit only: for running the services locally (README)
+#   docker compose --profile app up -d --build    + the API, the email service and the UI: http://localhost:8080
+#   docker compose --profile app down             stop everything (add -v to also delete the database)
+#
+# Tracing (Langfuse) is a separate stack: docker-compose.langfuse.yml, and docker-compose.tracing.yml connects the app
+# containers to it.
 
 services:
   postgres:
@@ -16,6 +21,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       READONLY_DB_PASSWORD: ${READONLY_DB_PASSWORD}
       APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+      EMAIL_DB_PASSWORD: ${EMAIL_DB_PASSWORD} # role email_rw: the email service's A2A tasks (plan 05)
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -37,6 +43,85 @@ services:
     ports:
       - "1025:1025" # SMTP
       - "8025:8025" # Web UI
+
+  # ------------------------------------------------------------------ the app (profile "app")
+
+  email-service:
+    # The email agent: a CrewAI crew behind an A2A server (services/email-a2a-service). Reached only by the API.
+    profiles: [app]
+    build: ./services/email-a2a-service
+    image: ops-platform/email-service
+    container_name: ops-email-service
+    restart: unless-stopped
+    env_file: ./services/email-a2a-service/.env # its own settings and secrets, never baked into the image
+    environment:
+      # Same .env, container addresses: the database by its service name, and the card's URL as the API reaches it.
+      EMAIL_DATABASE_URL: postgresql+asyncpg://email_rw:${EMAIL_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      EMAIL_SERVICE_PUBLIC_URL: http://email-service:8001
+      # The .env's SMTP_HOST=localhost means Mailpit on YOUR machine; here Mailpit is the "mailpit" container. A real
+      # mailbox from Docker: set EMAIL_DOCKER_SMTP_HOST (e.g. smtp.gmail.com) in the root .env; port, TLS and login
+      # still come from the service's .env.
+      SMTP_HOST: ${EMAIL_DOCKER_SMTP_HOST:-mailpit}
+      # Tracing off in Docker unless docker-compose.tracing.yml is added (localhost:3000 isn't reachable from here).
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health/ready', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  api:
+    # FastAPI + the orchestrator + the DB, Doc and Web agents (services/orchestrator-api).
+    profiles: [app]
+    build: ./services/orchestrator-api
+    image: ops-platform/api
+    container_name: ops-api
+    restart: unless-stopped
+    # Your user and group (HOST_UID/HOST_GID in .env, `id -u` / `id -g`): uploads and models in ./data stay yours.
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    env_file: ./.env
+    environment:
+      READONLY_DATABASE_URL: postgresql://readonly_agent:${READONLY_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      APP_DATABASE_URL: postgresql://app_rw:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      EMAIL_AGENT_URL: http://email-service:8001
+      LANGFUSE_PUBLIC_KEY: ""
+      LANGFUSE_SECRET_KEY: ""
+    volumes:
+      # Uploaded documents, picture crops and the downloaded models: the same folder the local API uses, so documents
+      # uploaded either way open in both (they share the database too).
+      - ./data:/repo/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      email-service:
+        condition: service_healthy
+    healthcheck:
+      # Readiness, not just "up": 503 (unhealthy) when a database is down. Also reconnects the email agent.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/ready', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s # the first start downloads the embedding and rerank models into ./data
+
+  frontend:
+    # The React UI, served by nginx, which forwards /api/* to the API. The only port the app publishes.
+    profiles: [app]
+    build: ./services/frontend
+    image: ops-platform/frontend
+    container_name: ops-frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80" # this machine only
+    depends_on:
+      api:
+        condition: service_healthy
 
 volumes:
   pgdata:

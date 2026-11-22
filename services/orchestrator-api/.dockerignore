@@ -1,0 +1,7 @@
+# Only pyproject.toml, uv.lock and app/ go into the image.
+.venv/
+tests/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/

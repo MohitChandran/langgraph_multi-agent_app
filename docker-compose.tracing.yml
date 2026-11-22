@@ -1,0 +1,26 @@
+# Optional: traces from the Docker app stack go to the local Langfuse (docker-compose.langfuse.yml, started first).
+#
+#   docker compose -f docker-compose.langfuse.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.tracing.yml --profile app up -d --build
+#
+# Inside a container, localhost:3000 is the container itself, so the API and the email service join Langfuse's own
+# network and reach it by name. The keys are the LANGFUSE_* values from .env (the same project for both services).
+services:
+  api:
+    environment:
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_BASE_URL: http://langfuse-web:3000
+    networks: [default, langfuse]
+
+  email-service:
+    environment:
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_BASE_URL: http://langfuse-web:3000
+    networks: [default, langfuse]
+
+networks:
+  langfuse:
+    external: true
+    name: ops-langfuse_default # the network of the "ops-langfuse" compose project

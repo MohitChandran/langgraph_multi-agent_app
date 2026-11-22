@@ -15,8 +15,8 @@ if [[ ! -f .env ]]; then
     exit 1
 fi
 
-echo "==> Removing containers and the Postgres data volume"
-docker compose down -v
+echo "==> Removing containers (the app's too, if it runs in Docker) and the Postgres data volume"
+docker compose --profile app down -v
 
 echo "==> Starting containers (schema, read-only role and app schema are created on first start)"
 docker compose up -d --wait  # --wait blocks until the healthchecks pass
