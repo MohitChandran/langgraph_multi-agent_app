@@ -1,0 +1,131 @@
+{
+  "meta": {
+    "date": "2026-11-22",
+    "commit": "25b02fc+changes",
+    "package": "duckduckgo-mcp-server==0.7.0",
+    "model": "openai/gpt-oss-20b",
+    "minutes": 0.4
+  },
+  "cases": [
+    {
+      "id": "h-gaugamela",
+      "question": "history of the Battle of Gaugamela",
+      "expected": "cited",
+      "outcome": "cited",
+      "passed": true,
+      "problems": [],
+      "sources": [
+        "https://en.wikipedia.org/wiki/Battle_of_Gaugamela",
+        "https://www.britannica.com/event/Battle-of-Gaugamela",
+        "https://www.worldhistory.org/Battle_of_Gaugamela/",
+        "https://www.worldhistory.org/article/108/the-battle-of-gaugamela-331-bce/",
+        "https://worldhistoryedu.com/the-battle-of-gaugamela-in-331-bce/",
+        "https://www.ebsco.com/research-starters/history/battle-gaugamela/"
+      ],
+      "steps": [
+        "check_query",
+        "search",
+        "parse",
+        "answer"
+      ],
+      "seconds": 2.9,
+      "answer": "The Battle of Gaugamela, fought on 1 October 331 BCE, was a decisive clash between Alexander the Great of Macedon and King Darius III of Persia, near modern\u2011day Mosul in Iraq, that sealed the fate of the Achaemenid Empire and established Alexander as a dominant ruler of the ancient world.[1][5] Alexander commanded about 47,000 troops, including infantry, cavalry, and a small number of war elephants, while Darius fielded a larger force of over 50,000, largely cavalry and hastily conscripted infantry, and also deployed chariots and elephants.[6] The Macedonian army\u2019s disciplined phalanx and effective use of cavalry outflanked the Persian forces, leading to a decisive victory for Alexander and the collapse of Persian resistance in the region.[2][3] The battle\u2019s outcome forced Darius to flee, effectively ending Persian dominance and paving the way for Alexander\u2019s conquest of the Persian heartland, which would later be incorporated into his empire.[4]"
+    },
+    {
+      "id": "h-great-wall",
+      "question": "Who built the Great Wall of China and why?",
+      "expected": "cited",
+      "outcome": "cited",
+      "passed": true,
+      "problems": [],
+      "sources": [
+        "https://www.chinahighlights.com/greatwall/fact/who-built.htm",
+        "https://en.wikipedia.org/wiki/Great_Wall_of_China",
+        "https://www.chinahighlights.com/greatwall/fact/why-built.htm",
+        "https://www.history.com/articles/great-wall-china-builders",
+        "https://en.wikipedia.org/wiki/History_of_the_Great_Wall_of_China",
+        "https://www.worldatlas.com/articles/why-was-the-great-wall-of-china-built.html"
+      ],
+      "steps": [
+        "check_query",
+        "search",
+        "parse",
+        "answer"
+      ],
+      "seconds": 4.9,
+      "answer": "The Great Wall was built and rebuilt by emperors, generals, state lords, and millions of laborers over more than 2,300 years. [1][4][6] Its primary purpose was to defend China\u2019s northern borders against nomadic incursions, to serve as a signaling and troop\u2011transfer system, and to protect and facilitate trade along the Silk Road. [2][3][6] The earliest walls date back to the 7th century BC, with the Qin dynasty linking them into a single system, and successive dynasties expanded the network. [2][5]"
+    },
+    {
+      "id": "t-mcp",
+      "question": "What is the Model Context Protocol (MCP) for AI applications?",
+      "expected": "cited",
+      "outcome": "cited",
+      "passed": true,
+      "problems": [],
+      "sources": [
+        "https://modelcontextprotocol.io/docs/2026-07-28/getting-started/intro",
+        "https://en.wikipedia.org/wiki/Model_Context_Protocol",
+        "https://www.anthropic.com/news/model-context-protocol"
+      ],
+      "steps": [
+        "check_query",
+        "search",
+        "parse",
+        "answer"
+      ],
+      "seconds": 2.2,
+      "answer": "The Model Context Protocol (MCP) is an open\u2011source standard introduced by Anthropic in November 2024 that defines a protocol for AI applications to connect to external data sources, tools, and workflows, enabling secure, two\u2011way communication between LLMs and the context they need to perform tasks.[4][5] MCP serves as a standardization layer that allows AI systems such as Claude or ChatGPT to access data from local files, databases, search engines, calculators, and other services without building custom connectors for each integration.[1]"
+    },
+    {
+      "id": "t-ec2-sla",
+      "question": "Amazon EC2 service level agreement monthly uptime percentage",
+      "expected": "cited",
+      "outcome": "cited",
+      "passed": true,
+      "problems": [],
+      "sources": [
+        "https://aws.amazon.com/compute/sla/",
+        "https://www.scribd.com/document/610111477/Amazon-Compute-Service-Level-Agreement"
+      ],
+      "steps": [
+        "check_query",
+        "search",
+        "parse",
+        "answer"
+      ],
+      "seconds": 2.4,
+      "answer": "Amazon EC2\u2019s SLA guarantees a monthly uptime percentage of at least 99.99% for instances deployed across two or more Availability Zones in a region, and 99.5% for individual instances.[1][3]"
+    },
+    {
+      "id": "e-email-in-query",
+      "question": "payment status for anna.k@company.example",
+      "expected": "rejected",
+      "outcome": "rejected",
+      "passed": true,
+      "problems": [],
+      "sources": [],
+      "steps": [
+        "check_query"
+      ],
+      "seconds": 0.0,
+      "answer": "I can't send internal company data (an email address) to a web search. Ask again without it."
+    },
+    {
+      "id": "n-nonsense",
+      "question": "qzxv wplmrt fjoqk zzyvb kkqx bfrtnl",
+      "expected": "not_found",
+      "outcome": "not_found",
+      "passed": true,
+      "problems": [],
+      "sources": [],
+      "steps": [
+        "check_query",
+        "search",
+        "parse",
+        "answer"
+      ],
+      "seconds": 2.5,
+      "answer": "The search results do not contain information that can answer the question."
+    }
+  ]
+}

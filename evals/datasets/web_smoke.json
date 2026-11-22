@@ -1,0 +1,11 @@
+{
+  "description": "Web search smoke eval (plannings/04, section 13): live questions straight to the web agent (DuckDuckGo MCP + gpt-oss). The live web changes, so this checks the SHAPE of each outcome, not exact answers. expected: cited = a successful answer whose [n] all point to returned http(s) sources; rejected = stopped by the query check before any search (company data); not_found = no answer claimed (no results, or the results don't answer it).",
+  "cases": [
+    {"id": "h-gaugamela", "kind": "history", "expected": "cited", "question": "history of the Battle of Gaugamela"},
+    {"id": "h-great-wall", "kind": "history", "expected": "cited", "question": "Who built the Great Wall of China and why?"},
+    {"id": "t-mcp", "kind": "tech", "expected": "cited", "question": "What is the Model Context Protocol (MCP) for AI applications?"},
+    {"id": "t-ec2-sla", "kind": "tech", "expected": "cited", "question": "Amazon EC2 service level agreement monthly uptime percentage"},
+    {"id": "e-email-in-query", "kind": "company data", "expected": "rejected", "question": "payment status for anna.k@company.example"},
+    {"id": "n-nonsense", "kind": "nonsense", "expected": "not_found", "question": "qzxv wplmrt fjoqk zzyvb kkqx bfrtnl"}
+  ]
+}

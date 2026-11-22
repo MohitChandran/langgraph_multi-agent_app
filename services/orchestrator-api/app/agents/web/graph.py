@@ -30,7 +30,7 @@ from langchain_core.messages import BaseMessage
 from langchain_core.runnables import Runnable
 from langgraph.graph import END, START, StateGraph
 
-from app.agents.citations import clean_citations
+from app.agents.citations import CITATION_MARK, clean_citations
 from app.agents.web.models import WebAgentState, WebAnswer, WebSearchResult, WebSource
 from app.agents.web.parsing import UNAVAILABLE_TEXT, failure_text, parse_results
 from app.agents.web.prompts import ANSWER_PROMPT
@@ -41,7 +41,9 @@ from app.llm import LLM_ERRORS, get_llm
 
 logger = logging.getLogger(__name__)
 
-ANSWER_MAX_TOKENS = 700
+# gpt-oss's hidden reasoning counts toward max_tokens: 700 was too few for "why" questions (Groq answered
+# json_validate_failed: "max completion tokens reached", found by the W6 smoke eval). 2,000 still bounds the cost.
+ANSWER_MAX_TOKENS = 2000
 NOT_FOUND_TEXT = "The web results I found don't answer this."
 ANSWER_FAILED_TEXT = "I found web results but couldn't write an answer right now. Please try again."
 
@@ -186,7 +188,9 @@ def build_result(question: str, state: dict[str, Any], steps: list[str]) -> WebS
     """Turn the final state into a WebSearchResult: the answer (or why there is none), the cited sources, the trace.
 
     success = the model found the answer AND cited at least one real result. Only cited sources are returned,
-    keeping their original numbers, so every [n] in the answer matches a source.
+    keeping their original numbers, so every [n] in the answer matches a source. If the model listed its sources
+    but wrote no [n] in the text (seen in the W6 smoke eval), the marks are appended once at the end, so the
+    answer always points to the sources shown under it.
     """
     common = {"question": question, "query": question, "steps": steps, "error": state.get("error")}
     if state.get("rejected"):
@@ -211,6 +215,8 @@ def build_result(question: str, state: dict[str, Any], steps: list[str]) -> WebS
     text, numbers = clean_citations(reply.answer, reply.citations, len(sources))
     cited = [sources[n - 1] for n in sorted(numbers)]  # listed 1, 2, 3... however they were cited
     success = reply.answer_found and bool(cited)
+    if success and not CITATION_MARK.search(text):
+        text = f"{text} " + "".join(f"[{source.n}]" for source in cited)
     outcome = (
         f"Answered from {len(cited)} of them, each claim cited."
         if success

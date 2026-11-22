@@ -1,9 +1,9 @@
 # Vendor SLA Policy
 
-## 1. Example Cloud
+## 1. Amazon Web Services (AWS)
 
-Example Cloud must provide 99.9% monthly uptime for all compute services.
-If monthly uptime falls below 99.9%, Example Cloud owes a 10% service credit on that month's invoice.
+AWS must provide 99.9% monthly uptime for all compute services we use.
+If monthly uptime falls below 99.9%, AWS owes a 10% service credit on that month's invoice.
 Below 99.0% uptime the service credit rises to 25%.
 
 ## 2. Escalation
@@ -11,4 +11,4 @@ Below 99.0% uptime the service credit rises to 25%.
 Outages longer than 4 hours must be escalated to the vendor manager within one business day.
 Repeated outages (three or more in one quarter) are reviewed by the procurement committee.
 
-(Fictional policy written for the orchestrator eval.)
+(Fictional internal policy written for the orchestrator eval.)

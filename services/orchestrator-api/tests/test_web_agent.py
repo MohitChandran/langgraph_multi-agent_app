@@ -146,6 +146,13 @@ async def test_citation_numbers_that_dont_exist_are_dropped() -> None:
     assert result.answer == "True [2]. Invented ." and [s.n for s in result.sources] == [2]
 
 
+async def test_sources_listed_but_not_marked_get_their_marks_appended() -> None:
+    """The model listed results 1 and 2 but wrote no [n]: the marks are added so the answer points to them."""
+    reply = WebAnswer(answer_found=True, answer="Fought in 331 BC near Arbela.", citations=[2, 1])
+    result = await agent(reply=reply).ask("q")
+    assert result.success and result.answer == "Fought in 331 BC near Arbela. [1][2]"
+
+
 async def test_answer_not_found_is_not_a_success() -> None:
     """The model says the results don't answer it: success False, no sources claimed."""
     reply = WebAnswer(answer_found=False, answer="The results don't say.", citations=[])
