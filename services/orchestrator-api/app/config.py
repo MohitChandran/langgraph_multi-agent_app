@@ -78,6 +78,26 @@ class Settings(BaseSettings):
     orch_supervisor_max_tokens: int = 1200  # S20: Groq limits output tokens per minute
     dummy_agent_delay_seconds: float = 0.0  # e.g. 1.0 to watch the dummy web/email agents "work"
 
+    # --- Input guardrail (NeMo Guardrails), plan 04 section 10 ---
+    # Every chat message (and /api/db/ask) is checked BEFORE the orchestrator sees it. The guard uses its own small
+    # Groq models with their own quotas, never the orchestrator's. false = no checks (local experiments only).
+    guard_enabled: bool = True
+    guard_jailbreak_model: str = "meta-llama/llama-prompt-guard-2-86m"  # rail 1: "ignore your instructions" attacks
+    guard_jailbreak_threshold: float = 0.5  # Prompt Guard's attack probability at or above this -> blocked
+    guard_safety_model: str = "allam-2-7b"  # rail 2: harmful/illegal requests (JSON verdict)
+    guard_timeout_seconds: float = 10.0  # per guard call; a timeout BLOCKS the message (fail closed)
+
+    # --- Web search agent (DuckDuckGo MCP server), plan 04 section 10 ---
+    # The server runs as its own process via `uvx --from <package>`: never add it to pyproject.toml (its `mcp` 2.x
+    # conflicts with langchain-mcp-adapters' `mcp` 1.x).
+    web_mcp_package: str = "duckduckgo-mcp-server==0.7.0"
+    web_safe_search: str = "STRICT"  # DuckDuckGo SafeSearch: STRICT | MODERATE | OFF
+    web_region: str = "wt-wt"  # "wt-wt" = no region
+    web_max_results: int = 6
+    web_search_rpm: int = 20  # the server's own rate limit (searches per minute)
+    web_search_timeout_seconds: float = 20.0
+    web_snippet_chars: int = 400  # each result's snippet is cut to this before it reaches the answer LLM
+
     @field_validator("data_dir")
     @classmethod
     def _resolve_data_dir(cls, value: Path) -> Path:
