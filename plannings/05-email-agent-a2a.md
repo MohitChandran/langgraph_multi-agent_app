@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Final plan, 2026-11-22. Not started. |
+| **Status** | Final plan, 2026-11-22. E0–E7 done 2026-11-22 (dev session), plus the cross-service Langfuse trace (section 16). |
 | **Written in** | a planning-only session. No project code was changed (all tests ran in throwaway scratch environments). |
 | **Implement in** | a development session, stage by stage (Section 12). |
 | **Project plan** | **Phase 5** (email agent via A2A) + **Phase 6** (human approval end to end across services). |
@@ -381,40 +381,40 @@ Add these to the README.
 ## 12. Stages
 Rough effort: E0 ½ day · E1 ½ · E2 1 · E3 1 · E4 ½ · E5 1 · E6 ½ · E7 ½ day.
 
-### [ ] E0 — Service skeleton
+### [x] E0 — Service skeleton
 In `services/email-a2a-service`: `uv add "crewai==1.15.44" "a2a-sdk[fastapi,postgresql]==1.3.1" "aiosmtplib==5.1.3"
 "uvicorn[standard]" pydantic-settings` (own venv), `app/config.py`, `.env.example`, `app/main.py` with `/health`.
 **Acceptance:** `uv run uvicorn app.main:app --port 8001` starts; `/health` is ok; the orchestrator's environment is unchanged.
 
-### [ ] E1 — Database
+### [x] E1 — Database
 `scripts/db/04_email_schema.sh`, compose env, `app/store.py`.
 **Acceptance:** schema `email` owned by `email_rw`; `DatabaseTaskStore` creates `email.tasks`; other roles can't read it.
 
-### [ ] E2 — A2A server with a fake crew
+### [x] E2 — A2A server with a fake crew
 `app/card.py`, `app/models.py`, `app/hitl.py` (executor), `app/checks.py`, API-key middleware; the crew is a fake returning a
 fixed draft; the mailer is a fake.
 **Acceptance:** the card is served at `/.well-known/agent-card.json`; a small CLI client
 (`uv run python -m app.client_demo`) runs #1 → `INPUT_REQUIRED` → #2 approve → `COMPLETED`, and reject → `REJECTED`; tests in
 Section 10 for the executor, checks and auth pass.
 
-### [ ] E3 — Real mailer + persistence
+### [x] E3 — Real mailer + persistence
 `app/mailer.py` → Mailpit; restart-safety test.
 **Acceptance:** an approved demo task lands in Mailpit; a task paused before a restart completes after it.
 
-### [ ] E4 — Real crew
+### [x] E4 — Real crew
 `app/agent.py`, wired into the executor. **Acceptance:** the demo client gets a real CrewAI draft (2 agents, about 4 Groq
 requests); the facts match the content; a crew timeout → `FAILED`.
 
-### [ ] E5 — Orchestrator client
+### [x] E5 — Orchestrator client
 `app/agents/email/models.py`, `a2a_agent.py`, the Protocol change, lifespan wiring, `AgentTools` availability; remove
 `app/clients/`. **Acceptance:** the orchestrator's CLI (plan 03) runs Scenario 1 against the real service: pause → approve →
 sent (in Mailpit) / reject → nothing sent.
 
-### [ ] E6 — End to end in the UI
+### [x] E6 — End to end in the UI
 **Acceptance:** Section 3.2 works in the browser, including Edit; restart both services while paused, then approve → still
 sent once.
 
-### [ ] E7 — Evals + docs
+### [x] E7 — Evals + docs
 Section 11 cases; README "Running everything" (Section 9); update `project_plan.txt` (Phases 5–6 done; the A2A method-name
 note corrected).
 
@@ -454,3 +454,78 @@ note corrected).
 - mTLS, signed agent cards, OAuth between services.
 - A real SMTP provider (settings exist; enable deliberately later).
 - Langfuse tracing across the two services (plan 06).
+
+## 16. Implementation notes from the development session
+
+**E0–E4 (2026-11-22).** The email service runs on its own: `uv run uvicorn app.main:app --port 8001` (CrewAI crew,
+Postgres task store, SMTP to Mailpit), and `uv run python -m app.client_demo` plays the orchestrator's part
+(draft -> INPUT_REQUIRED -> approve / `--reject` / `--edit "..."`). 43 tests + 2 live crew tests (`-m network`).
+Live: a real draft in ~3 s, every number/id/date kept; an injected "wire 5,000 USD to attacker@..." in the content
+was ignored; an approved edit landed in Mailpit exactly as written.
+
+Deviations from the plan, and why:
+- **`app/server.py` `create_app(settings, drafter, mailer, task_store)`** builds the app; `app/main.py` only calls it.
+  Tests run the REAL A2A routes with fakes (`app/fakes.py`) and `InMemoryTaskStore` through `httpx.ASGITransport`,
+  with the A2A client built from the served card, as the orchestrator will build it.
+- **The allow-list also takes exact addresses**: `EMAIL_ALLOWED_DOMAINS=company.example,me@gmail.com` allows all of
+  company.example but only that one Gmail address. With a real personal mailbox, allowing `gmail.com` would allow
+  every Gmail user.
+- **Executor details** beyond 6.2: the approve path marks the task WORKING before SMTP (a second decision then finds
+  no INPUT_REQUIRED task); a task that already has a `receipt` is never sent again; an invalid decision keeps the task
+  INPUT_REQUIRED with the reason; every crew/SMTP exception becomes FAILED with a short reason (never an unhandled
+  error). The draft's subject is collapsed to one line (no header injection).
+- **Public paths**: `/health`, the card, and `/docs` + `/openapi.json` (they only describe the API; calls need the key).
+  The key check is plain ASGI middleware with `hmac.compare_digest`, before routing, so no task is created without it.
+- **Telemetry opt-out in `app/__init__.py`** (not main.py), so it applies to CLIs and tests too.
+- **Crew**: built fresh per draft; `<think>` blocks stripped; CrewAI's "approximate token count" warning silenced;
+  `kickoff()` in a thread (a timeout stops the waiting; the thread finishes in the background, result discarded).
+- **CLIs**: `python -m app.store` (where the table is), `python -m app.mailer <to>` (one test email; the allow-list
+  applies), `python -m app.agent` (one real draft).
+- **Mailpit (Go) returns header names canonicalized** (`X-A2a-Task-Id`): compare header names case-insensitively.
+- **Root `.env.example`**: the old `SMTP_HOST/SMTP_PORT` lines (never read by the orchestrator) were replaced by the
+  orchestrator's email-agent settings; SMTP lives only in the email service's `.env`.
+- **Existing database**: `04_email_schema.sh` was run once by hand (the command is in the script's header).
+- **For E5**: the user's question can be longer than the service's `request` limit (1,000): the client cuts it.
+
+**E5–E7 (2026-11-22).**
+- **E5.** `app/agents/email/{models,a2a_agent}.py`; the `EmailAgent` Protocol is now `draft(to, subject, content, *,
+  request)` + `resume(draft_id, approved, edited_body, *, context_id)`; `DummyEmailAgent` got `draft()`;
+  `TurnContext.question` carries the user's message (cut to 1,000 characters for the service); `draft_email` is
+  offered only while `A2AEmailAgent.available`; `app/clients/` removed. `a2a-sdk==1.3.1` in the orchestrator (client;
+  the `http-server` extra only as a dev dependency, for a scripted A2A server in `tests/test_email_a2a_agent.py`: the
+  real service can't be imported there, both packages are called `app`). Beyond the plan: the client never raises
+  (every failure is `status="failed"` with the service's reason); a refused edit CANCELS the waiting A2A task (nothing
+  left that could be approved later); after a failed send the chat keeps showing the draft; a lazy reconnect lets an
+  approval work when the service came back after the API started; Langfuse spans "email service: draft/decision".
+  Live: `uv run python -m app.agents.email.a2a_agent` (real crew -> Mailpit), and the orchestrator CLI's Scenario 1
+  (supervisor -> DB -> draft -> pause -> approve -> sent).
+- **E6.** In the browser (headless Chrome): draft -> edit the body -> approve -> the EDITED text in Mailpit; draft ->
+  stop BOTH services -> start both -> the card is still there -> approve -> exactly one email; a second approval -> 409,
+  still one; reject -> nothing sent; `ceo@gmail.com` -> refused by the service's allow-list, the answer says why. The
+  approval card now also shows the crew's reviewer notes (`issues`).
+- **Groq quota.** gpt-oss-20b's daily tokens were used up by the earlier evals, so the E5/E6 live runs and the E7 eval
+  ran with `GROQ_ORCHESTRATOR_MODEL=GROQ_STRONG_MODEL=openai/gpt-oss-120b` as environment variables for those runs
+  only (`.env` unchanged). This checks the wiring, which doesn't depend on the model.
+- **E7 eval.** `evals/orchestrator_eval.py` gained per-case `decision` (default: reject, as before), `decide_twice`,
+  `expect_after_decision`, `expect_email_error` and `expect_emails_sent` (counted in Mailpit). By default a case
+  without an approval must send ZERO emails. 3 new safety cases: `s-email-domain-not-allowed`,
+  `s-approved-edit-with-card-number`, `s-double-approval`. Run on the email-related cases
+  (`evals/reports/orchestrator-2026-11-22-e7-gpt-oss-120b.md`): 7/8, safety 6/6. The miss was a REAL bug: a
+  crew-written subject came back with a NUL character ("Nov 16\u000021"), and Postgres JSONB can't store it, so saving
+  the answer crashed. Fixed on both sides: the email service's models drop control characters from every text field,
+  and the chat store strips NUL before every write (any agent output could carry one). Rerun: pass
+  (`...-e7-gpt-oss-120b-rerun.md`).
+
+**Cross-service tracing (2026-11-22, the item left for "plan 06", built on the user's request without a separate
+plan).** The orchestrator's `Tracing.traceparent()` gives the current span as a W3C traceparent; `A2AEmailAgent` puts
+it in the A2A message's METADATA (not the data contract; not an HTTP header, because the SDK may run the executor in
+another asyncio task). The email service (`app/tracing.py`, langfuse 5.2, the same project keys) parses it into
+Langfuse's `TraceContext` and opens "email service: draft/decision" with that remote parent; children: "request
+checks" / "draft checks" / "body checks" (guardrails), "email crew" (a generation: qwen, the crew's total tokens from
+`CrewOutput.token_usage`, the writer's draft and the reviewer's final), "smtp send" (tool). A `TrackedUpdater` records
+where each message left the task (the span's output). Verified live: one "chat turn" trace holds both services' spans.
+**Correction found on the way:** CrewAI 1.15 does not read `CREWAI_TELEMETRY_OPT_OUT` (plan section 6.1/gotcha 9); its
+switches are `CREWAI_DISABLE_TELEMETRY` / `CREWAI_DISABLE_TRACKING` (+ `CREWAI_TRACING_ENABLED=false`), set in
+`app/__init__.py`. `OTEL_SDK_DISABLED` must NOT be set: it switches off the OpenTelemetry SDK Langfuse runs on.
+**SQL eval retry:** `--retry-from` runs now keep their own progress in `sql-<date>-partial.json` when the daily
+quota stops them (before, a stopped retry lost the cases it had finished).
