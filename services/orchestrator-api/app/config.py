@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     orch_turn_timeout_seconds: float = 120.0  # the whole question, all agents included (S5)
     orch_tool_timeout_seconds: float = 60.0  # one agent call (S6)
     orch_tool_result_chars: int = 2000  # cap on the text a tool result sends back to the supervisor
-    orch_max_email_recipients: int = 5  # S12
+    orch_max_email_recipients: int = 1  # S12: one recipient per email (plan 04, decision 6)
     orch_supervisor_max_tokens: int = 1200  # S20: Groq limits output tokens per minute
     dummy_agent_delay_seconds: float = 0.0  # e.g. 1.0 to watch the dummy web/email agents "work"
 

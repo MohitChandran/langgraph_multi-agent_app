@@ -41,7 +41,7 @@ class Limits:
     max_calls_per_tool: int = 2  # S2: per ask_*/search_web tool
     max_email_drafts: int = 1  # S2: draft_email (fixed by the user's decision: one email per question)
     max_supervisor_calls: int = 6  # S3
-    max_recipients: int = 5  # S12
+    max_recipients: int = 1  # S12: exactly one recipient per email (plan 04, decision 6)
     tool_result_chars: int = 2000  # cap on what a tool result sends back to the supervisor
     tool_timeout_seconds: float = 60.0  # S6
     turn_timeout_seconds: float = 120.0  # S5

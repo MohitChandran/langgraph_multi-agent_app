@@ -359,6 +359,28 @@ async def test_s11_an_address_found_only_in_data_is_refused_but_one_typed_earlie
     assert paused.status == "awaiting_approval"
 
 
+async def test_an_email_to_two_recipients_is_refused_and_one_works() -> None:
+    """One recipient per email (S12, plan 04): a two-address draft is refused with a reason the LLM can act on."""
+    two = ["accounts@company.example", "legal@company.example"]
+    llm = ScriptedLLM(
+        call("draft_email", to=two, subject="s", content="c"),
+        call("draft_email", to=two[:1], subject="s", content="c"),
+    )
+    paused = await orchestrator(llm).ask(f"Email it to {two[0]} and {two[1]}", session_id=SESSION)
+    assert [c.status for c in paused.calls] == ["refused", "awaiting_approval"]
+    assert paused.calls[0].error == "Too many recipients (2): at most 1 per email."
+    assert paused.email["to"] == ["accounts@company.example"]
+
+
+def test_the_supervisor_prompt_has_the_open_scope_rule() -> None:
+    """General factual questions go to search_web (with sources); only small talk is answered without tools."""
+    from app.orchestrator.prompts import supervisor_prompt
+
+    prompt = supervisor_prompt(["ask_database", "search_web", "draft_email"], [], "", 4)
+    assert "anything else factual or current (history, science, news, public information) -> search_web" in prompt
+    assert "Exactly one recipient per email" in prompt
+
+
 async def test_resuming_a_turn_that_is_not_paused_fails_safely() -> None:
     """An unknown thread, or a turn that already finished, can't be resumed: failed, nothing sent."""
     orch = orchestrator(ScriptedLLM(answer("Hi.")))

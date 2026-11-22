@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Final plan, 2026-11-22. W0-W2 done 2026-11-22 (dev session; notes in Section 16). |
+| **Status** | Final plan, 2026-11-22. W0-W5 done 2026-11-22 (dev session; notes in Section 16). W6 (evals) open. |
 | **Written in** | a planning-only session. No project code was changed (all tests ran in throwaway scratch environments). |
 | **Implement in** | a development session, stage by stage (Section 11). |
 | **Project plan** | Phase 4 (web search via MCP) + a new safety layer in front of the Phase 2 orchestrator. |
@@ -400,12 +400,12 @@ Section 5.6 (chat service, `/api/db/ask`, lifespan, memory, frontend flow).
 - reloading the chat shows the blocked turn with "Guardrail ⛔";
 - the next question's memory doesn't contain the refusal.
 
-### [ ] W3 — MCP connection
+### [x] W3 — MCP connection  (done 2026-11-22)
 `app/agents/web/mcp.py` + CLI; capture the parser fixture.
 **Acceptance:** the CLI lists `search, fetch_content, expand_link` from the server, keeps only `search`, and prints results for
 a live query in ~1–2 s after a ~2 s start.
 
-### [ ] W4 — Web agent
+### [x] W4 — Web agent  (done 2026-11-22)
 `models.py` (move the models), `query_guard.py`, `parsing.py`, `prompts.py`, `graph.py` + CLI
 `uv run python -m app.agents.web.graph "question"`.
 **Acceptance:**
@@ -413,7 +413,7 @@ a live query in ~1–2 s after a ~2 s start.
 - a query containing an email address → rejected without searching;
 - unit tests with a fake MCP (parser fixture, failure texts, citation validation).
 
-### [ ] W5 — Orchestrator integration
+### [x] W5 — Orchestrator integration  (done 2026-11-22)
 Section 9. **Acceptance (UI):**
 - a general question routes to `search_web` and shows web sources with real links;
 - "email the overdue invoices to a@x.example and b@y.example" → refused (one recipient);
@@ -530,3 +530,41 @@ answered it; a reload shows both blocked turns; `/api/db/ask` with "pipe bomb" �
 4. **UI:** no new component files. `Messages.jsx` has a guard branch (the DB panels would crash on a GuardResult);
    `AgentFlow.jsx` has `GuardFlow` ("Your question → Guardrail ⛔ <category> → Not processed" + the reason) and a
    "Guardrail ✓" step in the orchestrator flow, with a note when Prompt Guard flagged a message the safety check passed.
+
+**W0-W2 committed and pushed** (ef16c5c, 6582914, 3c7396d).
+
+**W3 (2026-11-22).** `app/agents/web/mcp.py` (`WebSearchMCP`, `server_config`, CLI). Live: the server lists `search,
+fetch_content, expand_link`, only `search` is kept; the session opens in ~0.5 s once uvx has the package (~2.8 s the
+first time), searches take ~2.5-8 s (the first one is the slowest). Parser fixture captured live
+(`tests/fixtures/ddg_search_results.txt`, 6 results). Notes:
+1. `load_mcp_tools(session, handle_tool_errors=False)`: a tool error raises instead of coming back as text.
+2. `start()` never raises (90 s limit, the first start downloads the package): on failure `available=False`, logged.
+3. Shutdown checked: no server process is left after the API stops (`stack.push_async_callback(web_mcp.close)`).
+
+**W4 (2026-11-22).** `models.py` (moved `WebSource`/`WebSearchResult` unchanged + `WebAnswer`, `WebAgentState`),
+`query_guard.py`, `parsing.py`, `prompts.py`, `graph.py` (`WebSearchAgent` + CLI); 24 tests (`tests/test_web_agent.py`, fake
+backend + fake LLM) + 1 live test marked `network` (new pytest marker, skipped by default; passes). Live: "history of the
+Battle of Gaugamela" → a cited answer with 6 real URLs in ~4 s; a query with an email address and an invoice id → rejected
+in 0.3 s, nothing sent. Notes:
+1. **`clean_citations` moved to `app/agents/citations.py`** (shared by the Doc and Web agents; the Doc graph imports it
+   from there under the same name, so its tests are unchanged).
+2. **`WebSearchResult.sources` = the CITED results only, original numbers, sorted 1..n** (the UI lists them in order;
+   the orchestrator relabels them [W1]...).
+3. **Phone check:** 7+ digits with separators, except lists of 4-digit groups (years: "SLA changes 2025 2026" passes).
+4. gpt-oss sometimes puts every citation at the end ("…[1][2][3][4][5][6]") instead of after each sentence; the links
+   are valid. Watch it in W6.
+
+**W5 (2026-11-22).** Real `WebSearchAgent` in the lifespan (the dummy stays for tests), `search_web` offered only while
+the MCP server runs, the open-scope prompt rule, the new `search_web` description, one email recipient; 4 new tests; 299
+in total. Live (Chrome + API): a general question → `search_web`, "Web search ✓", real links; "email … to accounts@ and
+legal@" → the supervisor asked whether to send one email or separate ones (no draft); one recipient → approval → sent;
+`WEB_MCP_PACKAGE=duckduckgo-mcp-server==99.0.0` → the app starts, logs "search_web will not be offered", and a general
+question is answered "I don't have a tool available…". Deviations:
+1. **No max length on `DraftEmailArgs.to`:** Groq validates tool arguments against the schema itself and answers a
+   violation with a 400 (seen in plan 03 O3), which the supervisor can't learn from. The count is enforced by S12
+   (`ORCH_MAX_EMAIL_RECIPIENTS=1`), whose refusal ("at most 1 per email") the LLM can act on. The descriptions say
+   "exactly one recipient".
+2. The greeting's database + web example no longer mentions the dummy's "Example Cloud": "Which vendors have overdue
+   invoices, and what uptime does AWS publicly promise for EC2?".
+3. **Left for W6:** the orchestrator eval's dataset and documents still assume the dummy web agent ("Example Cloud")
+   and the old email rules.

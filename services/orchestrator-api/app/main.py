@@ -39,7 +39,8 @@ from app.agents.doc.store import DocumentStore
 from app.agents.doc.vision import VISION_MAX_TOKENS, describe_picture
 from app.agents.doc.worker import IngestionWorker
 from app.agents.email.dummy import DummyEmailAgent
-from app.agents.web.dummy import DummyWebSearchAgent
+from app.agents.web.graph import WebSearchAgent
+from app.agents.web.mcp import WebSearchMCP
 from app.chat.routes import router as chat_router
 from app.chat.store import ChatStore
 from app.config import get_settings
@@ -69,7 +70,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
       4. load the document models ONCE (embedder, reranker, tokenizer, Docling converter; plan
          gotcha 6), build the Doc agent
       5. build the input guard (plan 04: NeMo Guardrails, its own Groq models) and the orchestrator
-         (plan 03): the agents as tools (dummy web/email agents for now), the
+         (plan 03): the agents as tools (the web agent searches DuckDuckGo through its MCP server; email
+         is still a dummy), the
          Postgres checkpointer for paused email approvals, minus checkpoints nobody can approve any
          more (app.state.orchestrator)
       6. recover interrupted documents and start the ingestion worker
@@ -114,12 +116,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         logger.info("Doc agent ready (rerank: %s)", reranker.model_name if reranker else "off")
 
-        # The orchestrator calls the agents above as tools. Web search and email are dummies until
-        # Phases 4-5 build the real ones; only these two lines change then.
+        # The web agent's tool lives in another process: the DuckDuckGo MCP server, started once with uvx (plan 04).
+        # If it can't start, the app still starts and the orchestrator simply doesn't offer search_web.
+        web_mcp = WebSearchMCP(settings)
+        await web_mcp.start()
+        stack.push_async_callback(web_mcp.close)  # stops the server process on shutdown
+        web_agent = WebSearchAgent(
+            web_mcp, max_results=settings.web_max_results, snippet_chars=settings.web_snippet_chars
+        )
+
+        # The orchestrator calls the agents above as tools. Email is still a dummy until Phase 5 builds the real
+        # one (A2A); only that line changes then.
         tools = AgentTools(
             app.state.db_agent,
             app.state.doc_agent,
-            DummyWebSearchAgent(settings.dummy_agent_delay_seconds),
+            web_agent,
             DummyEmailAgent(settings.dummy_agent_delay_seconds),
             document_store,
             Limits.from_settings(settings),

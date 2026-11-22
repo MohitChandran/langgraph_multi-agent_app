@@ -103,11 +103,12 @@ def test_s11_recipients_must_come_from_the_user_case_insensitively() -> None:
     assert verdict.error == "ceo@vendor.example was not given by the user. Ask the user to confirm the address."
 
 
-def test_s12_recipient_count() -> None:
-    """More recipients than the limit is refused, even when the user typed all of them."""
-    addresses = [f"person{n}@company.example" for n in range(6)]
+def test_s12_one_recipient_per_email() -> None:
+    """Exactly one recipient (plan 04, decision 6): two are refused even when the user typed both; one passes."""
+    addresses = ["accounts@company.example", "legal@company.example"]
     verdict = check("draft_email", EMAIL | {"to": addresses}, user_emails=addresses)
-    assert verdict.error == "Too many recipients (6): at most 5 per email."
+    assert verdict.error == "Too many recipients (2): at most 1 per email."
+    assert check("draft_email", EMAIL | {"to": addresses[:1]}, user_emails=addresses).allowed
 
 
 def test_extract_user_emails_reads_only_the_texts_it_is_given() -> None:

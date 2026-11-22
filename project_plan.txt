@@ -319,7 +319,9 @@ Rule: Claude writes the code and explains every file/function; interview prep ha
           orchestrator + the real web agent (DuckDuckGo MCP server via uvx) + one email recipient.
     Steps: [x] W0-W2 (2026-11-22): packages + settings; input guard (Prompt Guard advisory, safety model decides;
                34/34 on the guard cases) in front of /api/chat and /api/db/ask, "Guardrail ⛔/✓" in the UI
-           [ ] W3 MCP connection  [ ] W4 web agent (LangGraph)  [ ] W5 orchestrator integration  [ ] W6 evals
+           [x] W3-W5 (2026-11-22): DuckDuckGo MCP server via uvx (one session, `search` only), the web agent
+               (LangGraph: check query -> search -> parse -> cited answer), wired into the orchestrator; one email
+               recipient   [ ] W6 evals (guard eval, web smoke eval, orchestrator eval update)
     Learn: MCP architecture, stdio vs HTTP transports, tool schemas, parallel graph branches.
 
 [ ] Phase 5 — Email Agent via A2A (no HITL yet)

@@ -185,6 +185,18 @@ async def test_available_tools_depend_on_the_chats_documents() -> None:
     assert "ask_documents" in tools and names == ["q3-report.pdf"]
 
 
+async def test_search_web_is_offered_only_while_the_web_agent_can_search() -> None:
+    """The real web agent reports `available` (its MCP server is running); when it's down, search_web disappears."""
+
+    class OfflineWeb(FakeAgent):
+        """A web agent whose MCP server isn't running."""
+
+        available = False
+
+    tools, _ = await make_tools(web=OfflineWeb()).available(SESSION)
+    assert tools == ["ask_database", "draft_email"]
+
+
 async def test_run_records_the_call_and_passes_history_and_session() -> None:
     """A successful call: status ok, the full result kept for the UI, the agent got history + session id."""
     db = FakeAgent(db_result())

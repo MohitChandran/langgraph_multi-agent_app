@@ -65,7 +65,10 @@ class SearchWebArgs(BaseModel):
 class DraftEmailArgs(BaseModel):
     """Arguments of draft_email. The recipient COUNT limit is a setting, so it's checked in guards (S12)."""
 
-    to: list[str] = Field(min_length=1, description="Recipient email addresses, exactly as the user wrote them.")
+    # No max length in the schema on purpose: Groq validates tool arguments against the schema itself and answers a
+    # violation with a 400 the supervisor can't learn from. The count is checked by the guard (S12, a setting) instead,
+    # which refuses with a message the LLM can act on ("at most 1 per email").
+    to: list[str] = Field(min_length=1, description="The ONE recipient's email address, exactly as the user wrote it.")
     subject: str = Field(min_length=1, max_length=150)
     # Found with gpt-oss-20b on Groq: when it put a markdown TABLE in `content`, it sometimes broke the
     # tool call's JSON (closed it before `subject`/`to`), and Groq rejected the call with a 400. Plain
@@ -101,10 +104,10 @@ TOOL_DESCRIPTIONS = {
     "tickets, users (employees), audit logs. Read-only. Ask ONE self-contained question.",
     "ask_documents": "Answer a question from the documents uploaded to THIS chat: {filenames}. "
     "Returns an answer with page citations.",
-    "search_web": "Search the public internet for recent, public information (vendor announcements, news, published "
-    "SLAs). Never use it for the company's own data.",
+    "search_web": "Search the public internet (DuckDuckGo) for public, current or general-knowledge information. "
+    "Never put company data (emails, invoice numbers, amounts, names of employees) in the query.",
     "draft_email": "Draft an email for the user to review. It is NOT sent until the user approves it. Only use when "
-    "the user explicitly asks to email/send something, only to addresses the user wrote, and put the actual "
+    "the user explicitly asks to email/send something, to exactly one recipient the user wrote, and put the actual "
     "information (from earlier tool results) in `content`. Call it alone, after you have gathered the data.",
 }
 
@@ -327,10 +330,13 @@ class AgentTools:
 
         ask_documents only exists when the chat has at least one document (any status: the Doc agent
         itself says "still processing"). The filenames go into ask_documents' description.
+        search_web only exists while the web agent can search (its MCP server is running, plan 04 section 6);
+        an agent without an `available` attribute (the dummy) always can.
         """
         documents = await self.documents.list_documents(session_id) if session_id else []
         names = [document.filename for document in documents]
-        tools = ["ask_database", *(["ask_documents"] if names else []), "search_web", "draft_email"]
+        web = getattr(self.agents["web"], "available", True)
+        tools = ["ask_database", *(["ask_documents"] if names else []), *(["search_web"] if web else []), "draft_email"]
         return tools, names
 
     async def run(self, requests: list[ToolRequest], ctx: TurnContext) -> list[ToolOutcome]:

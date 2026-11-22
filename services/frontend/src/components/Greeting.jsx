@@ -9,7 +9,7 @@ const DATABASE_SUGGESTIONS = [
   "Which pending invoices are due this week?",
   "Which contracts expire in the next 60 days, and who owns them?",
   "Which vendors have overdue invoices? Email the list to accounts@company.example",
-  "How many open tickets do we have for Example Cloud, and did it change its SLA recently?",
+  "Which vendors have overdue invoices, and what uptime does AWS publicly promise for EC2?",
 ];
 
 // In a chat with uploaded documents, ask_documents becomes available: suggest document questions.
