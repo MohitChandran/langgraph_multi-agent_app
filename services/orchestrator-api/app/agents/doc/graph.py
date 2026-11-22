@@ -22,6 +22,7 @@ from langchain_core.messages import BaseMessage
 from langchain_core.runnables import Runnable
 from langgraph.graph import END, START, StateGraph
 
+from app.agents.citations import CITATION_MARK, clean_citations  # noqa: F401  (re-exported for tests)
 from app.agents.doc.models import Citation, DocAgentResult, DocAgentState, DocAnswer, Hit, RetrievalTrace
 from app.agents.doc.prompts import ANSWER_PROMPT, NOT_FOUND_TEXT, REWRITE_PROMPT
 from app.agents.doc.retrieval import Retriever, select_sources
@@ -31,7 +32,6 @@ from app.llm import LLM_ERRORS, get_llm
 
 REWRITE_MAX_TOKENS = 100
 SNIPPET_CHARS = 200
-CITATION_MARK = re.compile(r"\[(\d+)\]")
 TABLE_SEPARATOR = re.compile(r"\|(?:-+\|)+")  # the "|---|---|" row of a markdown table
 CHUNK_KINDS = {"text": "passage", "table": "table", "picture": "figure"}  # chunk_type -> words a reader expects
 
@@ -284,19 +284,6 @@ def format_sources(sources: list[Hit]) -> str:
         section = f", section: {hit.heading_path}" if hit.heading_path else ""
         blocks.append(f"[{n}] ({hit.filename}, {pages}{section}, {hit.chunk_type})\n{hit.content}")
     return "\n\n".join(blocks)
-
-
-def clean_citations(text: str, cited: list[int], source_count: int) -> tuple[str, list[int]]:
-    """Keep only citation numbers that are real sources; returns (text without invalid [n], valid numbers in order).
-
-    The numbers come from BOTH the model's `citations` list and the [n] marks in its text (models
-    sometimes forget one of the two). An invalid [7] with 6 sources is removed from the text.
-    """
-    valid = range(1, source_count + 1)
-    in_text = [int(n) for n in CITATION_MARK.findall(text)]
-    numbers = list(dict.fromkeys(n for n in [*in_text, *cited] if n in valid))  # unique, first-seen order
-    cleaned = CITATION_MARK.sub(lambda m: m.group(0) if int(m.group(1)) in valid else "", text)
-    return cleaned.strip(), numbers
 
 
 def to_citation(n: int, hit: Hit) -> Citation:

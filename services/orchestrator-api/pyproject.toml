@@ -31,11 +31,13 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"  # run `async def test_...` functions without decorating each one
-# Slow tests (real Docling parsing, ~1 min) are skipped by default; run them with: uv run pytest -m slow
-addopts = "-m 'not slow'"
+# Slow tests (real Docling parsing, ~1 min) and network tests (the live DuckDuckGo MCP server) are skipped by
+# default; run them with: uv run pytest -m slow  /  uv run pytest -m network
+addopts = "-m 'not slow and not network'"
 markers = [
     "integration: needs the local Postgres from docker-compose (skipped when unavailable)",
     "slow: runs real models (Docling parsing); takes seconds to minutes",
+    "network: needs the internet (starts the real DuckDuckGo MCP server with uvx)",
 ]
 
 # --- CPU-only PyTorch (Docling needs torch; this machine has no GPU) ---
