@@ -109,7 +109,7 @@ class WebSearchAgent:
         builder.add_conditional_edges("search", self.route_after_search)
         builder.add_conditional_edges("parse", self.route_after_parse)
         builder.add_edge("answer", END)
-        return builder.compile()
+        return builder.compile(name="web agent")  # the run name in traces (Langfuse)
 
     async def ask(
         self, question: str, history: list[ConversationTurn] | None = None, session_id: UUID | None = None

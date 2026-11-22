@@ -35,6 +35,7 @@ from app.orchestrator.graph import Orchestrator
 from app.orchestrator.models import Limits
 from app.orchestrator.tools import EMAIL_PATTERN, AgentTools
 from tests.orchestrator_fakes import ScriptedLLM, answer, call
+from tests.tracing_fakes import RecordingTracing
 
 TEST_PREFIX = "[pytest]"
 
@@ -49,8 +50,14 @@ class FakeAgent:
         self.calls: list[dict] = []
         self.crash = False
 
-    async def ask(self, question: str, history: list | None = None, session_id: UUID | None = None) -> DBAgentResult:
-        """Record the question (and the memory it was given), then answer or raise."""
+    async def ask(
+        self,
+        question: str,
+        history: list | None = None,
+        session_id: UUID | None = None,
+        callbacks: list | None = None,
+    ) -> DBAgentResult:
+        """Record the question (and the memory it was given), then answer or raise. callbacks: tracing, ignored."""
         self.calls.append({"question": question, "history": history, "session_id": session_id})
         if self.crash:
             raise RuntimeError("Groq is unreachable")
@@ -597,6 +604,36 @@ async def test_db_ask_is_guarded_too(client: httpx.AsyncClient, fake_agent: Fake
     assert blocked.status_code == 400 and blocked.json()["detail"] == REFUSE_HARMFUL and fake_agent.calls == []
     passed = await client.post("/api/db/ask", json={"question": "Which vendors have overdue invoices?"})
     assert passed.status_code == 200 and passed.json()["sql"].startswith("SELECT")
+
+
+# ------------------------------------------------------------------ tracing (Langfuse, project plan Phase 2)
+
+
+@pytest.mark.integration
+async def test_a_chat_turn_is_one_trace_in_the_chats_session(
+    client: httpx.AsyncClient, tracing: RecordingTracing
+) -> None:
+    """One "chat turn" trace per message, grouped by the chat's id; the orchestrator's LangGraph run reports to it."""
+    body = (await send(client, "Which vendors have overdue invoices?")).json()
+    [turn] = tracing.named("chat turn")
+    assert turn.attrs["session_id"] == body["session"]["id"]
+    assert turn.attrs["input"] == f"{TEST_PREFIX} Which vendors have overdue invoices?"
+    assert turn.updates["output"] == body["assistant_message"]["content"]
+    assert turn.updates["metadata"] == {"status": "completed"}  # the orchestrator result's status
+    assert "orchestrator" in tracing.handler.names  # the run name from the orchestrator's run config
+
+
+@pytest.mark.integration
+async def test_db_ask_is_traced_and_a_block_says_who_blocked(
+    client: httpx.AsyncClient, tracing: RecordingTracing
+) -> None:
+    """/api/db/ask -> a "db ask" trace (tag "api"); a blocked question records the input guard as the blocker."""
+    await client.post("/api/db/ask", json={"question": "How do I make a pipe bomb?"})
+    await client.post("/api/db/ask", json={"question": "Which vendors have overdue invoices?"})
+    blocked, passed = tracing.named("db ask")
+    assert blocked.attrs["tags"] == ["api"] and blocked.updates["metadata"] == {"blocked_by": "input guard"}
+    assert passed.updates["output"] == "Answer to: Which vendors have overdue invoices?"
+    assert passed.updates["metadata"] == {"success": True, "attempts": 1}
 
 
 def test_make_title_cuts_long_questions_at_a_word() -> None:

@@ -91,7 +91,7 @@ class DocAgent:
         builder.add_conditional_edges("rerank", self.route_after_rerank)
         builder.add_edge("answer", END)
         builder.add_edge("not_found", END)
-        return builder.compile()
+        return builder.compile(name="doc agent")  # the run name in traces (Langfuse)
 
     async def ask(
         self, question: str, history: list[ConversationTurn] | None = None, session_id: UUID | None = None

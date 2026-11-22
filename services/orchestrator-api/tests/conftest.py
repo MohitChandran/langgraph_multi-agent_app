@@ -7,7 +7,7 @@ All fixtures need the local Postgres. If there is no .env or Postgres isn't runn
 (e.g. in CI), the test is SKIPPED instead of failing: run ./scripts/reset_db.sh first.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 
@@ -15,7 +15,9 @@ from app.agents.db.database import ReadOnlyDatabase
 from app.agents.doc.store import DocumentStore
 from app.chat.store import ChatStore
 from app.config import Settings, get_settings
+from app.observability import Tracing, set_tracing
 from app.orchestrator.checkpoint import CheckpointStore
+from tests.tracing_fakes import RecordingTracing
 
 
 def settings_or_skip() -> Settings:
@@ -96,3 +98,14 @@ async def checkpoint_store() -> AsyncIterator[CheckpointStore]:
         yield store
     finally:
         await store.close()
+
+
+@pytest.fixture
+def tracing() -> Iterator[RecordingTracing]:
+    """Tracing ON for one test, recording instead of sending; the app's tracing is off again afterwards."""
+    recording = RecordingTracing()
+    set_tracing(recording)
+    try:
+        yield recording
+    finally:
+        set_tracing(Tracing())

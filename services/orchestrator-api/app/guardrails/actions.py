@@ -33,6 +33,7 @@ from groq import AsyncGroq
 
 from app.config import Settings
 from app.guardrails.policy import SAFETY_POLICY
+from app.observability import get_tracing, usage_of
 
 logger = logging.getLogger(__name__)
 
@@ -120,18 +121,21 @@ class GuardActions:
         for "ignore previous instructions...". It isn't a chat model: there's no system prompt, the
         message itself is the input. (It reads ~512 tokens; chat messages are capped at 1,000 characters.)
         """
-        try:
-            response = await asyncio.wait_for(
-                self.client.chat.completions.create(
-                    model=self.jailbreak_model, messages=[{"role": "user", "content": text}]
-                ),
-                self.timeout_seconds,
-            )
-            score = float(response.choices[0].message.content.strip())
-            if not math.isfinite(score):
-                raise ValueError(f"not a probability: {score}")
-        except Exception as error:  # noqa: BLE001  (never raise into NeMo)
-            return self._failed(JAILBREAK_RAIL, error)
+        with get_tracing().span("prompt guard", as_type="generation", input=text, model=self.jailbreak_model) as gen:
+            try:
+                response = await asyncio.wait_for(
+                    self.client.chat.completions.create(
+                        model=self.jailbreak_model, messages=[{"role": "user", "content": text}]
+                    ),
+                    self.timeout_seconds,
+                )
+                score = float(response.choices[0].message.content.strip())
+                if not math.isfinite(score):
+                    raise ValueError(f"not a probability: {score}")
+            except Exception as error:  # noqa: BLE001  (never raise into NeMo)
+                gen.update(level="ERROR", status_message=str(error)[:200])
+                return self._failed(JAILBREAK_RAIL, error)
+            gen.update(output={"score": score}, usage_details=usage_of(response))
         signal: Signal = "flag" if score >= self.jailbreak_threshold else "ok"
         record({"rail": JAILBREAK_RAIL, "verdict": signal, "score": round(score, 4)})
         return signal
@@ -144,6 +148,11 @@ class GuardActions:
         A block becomes "jailbreak" when Prompt Guard flagged this message (rail 1, read from the trace) or
         the model's category says jailbreak: the user then gets the "change how the assistant works" text.
         """
+        with get_tracing().span("safety model", as_type="generation", input=text, model=self.safety_model) as gen:
+            return await self._safety_check(text, gen)
+
+    async def _safety_check(self, text: str, gen: Any) -> Verdict:
+        """The body of safety_model_check, inside its Langfuse generation (`gen`, a no-op when tracing is off)."""
         try:
             response = await asyncio.wait_for(
                 self.client.chat.completions.create(
@@ -163,7 +172,9 @@ class GuardActions:
             if verdict not in ("allow", "block"):
                 raise ValueError(f"unexpected verdict: {verdict!r}")
         except Exception as error:  # noqa: BLE001
+            gen.update(level="ERROR", status_message=str(error)[:200])
             return self._failed(SAFETY_RAIL, error)
+        gen.update(output=data, usage_details=usage_of(response))
         category = str(data.get("category") or "") or None
         if verdict == "block" and (prompt_guard_flagged() or "jailbreak" in (category or "").lower()):
             verdict = "jailbreak"

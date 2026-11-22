@@ -65,6 +65,32 @@ questions and expected answers in `evals/datasets/test_documents_questions.json`
 - Mailpit inbox: http://localhost:8025
 - Postgres: `localhost:5432` (admin role for seeding; `readonly_agent` role for the DB agent)
 
+## Tracing (Langfuse)
+
+Every chat message becomes one trace in a self-hosted Langfuse: what was asked, which guard checks and agents
+ran, every LLM call with its model, tokens and latency, and the answer. Traces of one chat share a session.
+
+```bash
+docker compose -f docker-compose.langfuse.yml up -d   # first start pulls ~3 GB; ready after 1-3 minutes
+```
+
+Open http://localhost:3000 and log in with `LANGFUSE_INIT_USER_EMAIL` / `LANGFUSE_INIT_USER_PASSWORD` from
+`.env`. The first start creates the project and its API keys from `.env` (see the Langfuse section of
+`.env.example`), so the API sends traces as soon as it restarts. Without the two Langfuse keys, tracing is off
+and nothing is sent.
+
+```
+chat turn                       one trace per message; session = the chat
+├─ input guard                  guardrail: the verdict
+│  ├─ prompt guard              generation: model, tokens
+│  └─ safety model              generation: model, tokens
+└─ orchestrator                 the LangGraph run: prepare → supervisor → tools → finalize
+   └─ tools → db agent / doc agent / web agent   each agent's own graph, nested under its tool call
+```
+
+An email approval is its own trace ("email decision") in the same session; `POST /api/db/ask` is traced as
+"db ask". The code is in `services/orchestrator-api/app/observability.py`.
+
 ## Browsing the data
 
 Connect any SQL client (e.g. DBeaver) with the values from your `.env`:

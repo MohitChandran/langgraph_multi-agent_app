@@ -48,6 +48,7 @@ from app.dependencies import DBAgentDep, InputGuardDep
 from app.documents.routes import router as documents_router
 from app.guardrails.guard import InputGuard
 from app.llm import get_llm
+from app.observability import get_tracing, setup_tracing
 from app.orchestrator.checkpoint import CheckpointStore
 from app.orchestrator.graph import Orchestrator
 from app.orchestrator.models import Limits
@@ -75,7 +76,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
          Postgres checkpointer for paused email approvals, minus checkpoints nobody can approve any
          more (app.state.orchestrator)
       6. recover interrupted documents and start the ingestion worker
-    After the server stops: stop the worker first, then close all pools.
+    Tracing (Langfuse) is set up first, so everything after it can be traced; it's off without the Langfuse keys.
+    After the server stops: stop the worker first, then close all pools, then send the last traces.
 
     AsyncExitStack closes whatever was opened, in reverse order, even if a later step
     fails (e.g. the chat pool can't connect after the read-only pool already opened).
@@ -83,6 +85,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     settings = get_settings()
     async with AsyncExitStack() as stack:
+        tracing = setup_tracing(settings)
+        stack.push_async_callback(asyncio.to_thread, tracing.shutdown)  # registered first -> runs LAST: final flush
         db = await stack.enter_async_context(ReadOnlyDatabase(settings.readonly_database_url))
         app.state.db_agent = DBAgent(db, await load_schema(db))
         logger.info("DB agent ready")
@@ -208,11 +212,17 @@ async def ask_db(body: AskRequest, guard: InputGuardDep, agent: DBAgentDep) -> D
     turns bad SQL and database errors into a normal answer (via its retry loop). Anything
     else, e.g. Groq unreachable after all retries, becomes a 502 and is logged in full.
     """
-    verdict = await guard.check(body.question.strip())
-    if verdict.status == "blocked":
-        raise HTTPException(status_code=400, detail=verdict.answer)
-    try:
-        return await agent.ask(body.question.strip())
-    except Exception as error:
-        logger.exception("DB agent failed for question: %s", body.question)
-        raise HTTPException(status_code=502, detail=f"The agent failed: {type(error).__name__}: {error}") from error
+    question = body.question.strip()
+    with get_tracing().trace("db ask", input=question, tags=["api"]) as trace:
+        verdict = await guard.check(question)
+        if verdict.status == "blocked":
+            trace.update(output=verdict.answer, metadata={"blocked_by": "input guard"})
+            raise HTTPException(status_code=400, detail=verdict.answer)
+        try:
+            result = await agent.ask(question, callbacks=get_tracing().callbacks())
+        except Exception as error:
+            logger.exception("DB agent failed for question: %s", body.question)
+            trace.update(level="ERROR", status_message=f"{type(error).__name__}: {error}"[:200])
+            raise HTTPException(status_code=502, detail=f"The agent failed: {type(error).__name__}: {error}") from error
+        trace.update(output=result.answer, metadata={"success": result.success, "attempts": result.attempts})
+        return result

@@ -37,6 +37,7 @@ from pydantic import BaseModel
 from app.config import REPO_ROOT, Settings, get_settings
 from app.guardrails.actions import JAILBREAK_RAIL, GuardActions, reset_trace, start_trace
 from app.guardrails.policy import REFUSE_HARMFUL, REFUSE_JAILBREAK, REFUSE_UNAVAILABLE
+from app.observability import get_tracing
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,14 @@ class InputGuard:
         return cls(GuardActions.from_settings(settings, client), enabled=settings.guard_enabled)
 
     async def check(self, message: str) -> GuardResult:
-        """Run both rails on one message and return the verdict (never raises)."""
+        """Run both rails on one message and return the verdict (never raises). Traced as a Langfuse guardrail."""
+        with get_tracing().span("input guard", as_type="guardrail", input=message) as observation:
+            result = await self._check(message)
+            observation.update(output=result.model_dump(exclude={"answer"}, exclude_none=True))
+            return result
+
+    async def _check(self, message: str) -> GuardResult:
+        """The check itself: NeMo's input rails, then the verdict built from NeMo's result and the trace."""
         if not self.enabled:
             return GuardResult(status="passed", reason="guard disabled")
         started = time.perf_counter()

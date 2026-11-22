@@ -29,6 +29,7 @@ from app.chat.memory import ConversationTurn, load_history
 from app.chat.models import ApprovalResponse, ChatResponse, Message
 from app.chat.store import ChatStore
 from app.guardrails.guard import GuardResult
+from app.observability import get_tracing
 from app.orchestrator.models import EmailDecision, OrchestratorResult
 
 logger = logging.getLogger(__name__)
@@ -141,18 +142,27 @@ async def send_message(
             raise SessionNotFoundError(f"Chat {session_id} was deleted.") from error
 
         started = time.perf_counter()
-        verdict = await guard.check(content)
-        if verdict.status == "blocked":
-            payload = guard_payload(verdict)
-            assistant_message = await store.complete_message(pending.id, verdict.answer, payload, _elapsed_ms(started))
-        else:
-            try:
-                result = await orchestrator.ask(content, history, session_id, pending.id)
-            except Exception:  # the orchestrator catches its own failures; this is the last safety net
-                logger.exception("Orchestrator crashed for message %s", pending.id)
-                result = None
-            passed = {"guard": guard_summary(verdict)}
-            assistant_message = await save_result(store, pending.id, result, _elapsed_ms(started), passed)
+        # One Langfuse trace per turn (no-op when tracing is off): the guard and the orchestrator nest under it.
+        with get_tracing().trace(
+            "chat turn", session_id=str(session_id), input=content, metadata={"message_id": pending.id}
+        ) as trace:
+            verdict = await guard.check(content)
+            if verdict.status == "blocked":
+                payload = guard_payload(verdict)
+                assistant_message = await store.complete_message(
+                    pending.id, verdict.answer, payload, _elapsed_ms(started)
+                )
+                trace.update(output=verdict.answer, metadata={"blocked_by": "input guard"})
+            else:
+                try:
+                    result = await orchestrator.ask(content, history, session_id, pending.id)
+                except Exception:  # the orchestrator catches its own failures; this is the last safety net
+                    logger.exception("Orchestrator crashed for message %s", pending.id)
+                    result = None
+                passed = {"guard": guard_summary(verdict)}
+                assistant_message = await save_result(store, pending.id, result, _elapsed_ms(started), passed)
+                trace.update(output=result.answer if result else AGENT_FAILED_TEXT,
+                             metadata={"status": result.status if result else "failed"})  # fmt: skip
     finally:
         session = await store.release_session(session_id)
 
@@ -189,11 +199,16 @@ async def resolve_email_approval(
         if found is None or found[1].status != "awaiting_approval":
             raise NotAwaitingApprovalError("This message is not waiting for an email approval.")
         started = time.perf_counter()
-        try:
-            result = await orchestrator.resume_email(session_id, message_id, decision)
-        except Exception:
-            logger.exception("Orchestrator crashed resuming message %s", message_id)
-            result = None
+        decided = {"approved": decision.approved, "edited": decision.edited_body is not None}
+        with get_tracing().trace(
+            "email decision", session_id=str(session_id), input=decided, metadata={"message_id": message_id}
+        ) as trace:
+            try:
+                result = await orchestrator.resume_email(session_id, message_id, decision)
+            except Exception:
+                logger.exception("Orchestrator crashed resuming message %s", message_id)
+                result = None
+            trace.update(output=result.answer if result else AGENT_FAILED_TEXT)
         latency = (message.latency_ms or 0) + _elapsed_ms(started)  # time before the pause + after it
         kept = {"guard": message.payload["guard"]} if "guard" in message.payload else None  # from the first half
         assistant_message = await save_result(store, message_id, result, latency, kept)

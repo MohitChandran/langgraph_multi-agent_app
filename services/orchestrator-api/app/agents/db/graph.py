@@ -25,7 +25,7 @@ import asyncio
 import json
 import time
 from datetime import date
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from langchain_core.messages import BaseMessage
@@ -93,10 +93,14 @@ class DBAgent:
         builder.add_conditional_edges("validate_sql", self.route_after_validate)
         builder.add_conditional_edges("execute_sql", self.route_after_execute)
         builder.add_edge("answer", END)
-        return builder.compile()
+        return builder.compile(name="db agent")  # the run name in traces (Langfuse)
 
     async def ask(
-        self, question: str, history: list[ConversationTurn] | None = None, session_id: UUID | None = None
+        self,
+        question: str,
+        history: list[ConversationTurn] | None = None,
+        session_id: UUID | None = None,
+        callbacks: list[Any] | None = None,
     ) -> DBAgentResult:
         """Run the whole workflow for one question and package the final state as a DBAgentResult.
 
@@ -106,6 +110,9 @@ class DBAgent:
                 means no memory: the CLI, /api/db/ask and the eval call it like that.
                 It's formatted into prompt text ONCE here, not again in every node.
             session_id: accepted so both agents share one signature (chat/service.py); unused here.
+            callbacks: LangChain callbacks for a run started OUTSIDE the orchestrator (/api/db/ask passes the
+                Langfuse handler). None = inherit: inside the orchestrator the agent's run already nests under
+                the tool call, and passing callbacks here would cut it loose.
 
         Uses astream (not ainvoke) so we can also record WHICH nodes ran, in order:
         "updates" events name the node that just finished ({node_name: changes}),
@@ -114,7 +121,8 @@ class DBAgent:
         steps: list[str] = []
         state: DBAgentState = {}
         initial: DBAgentState = {"question": question, "history": format_history(history or []), "attempts": 0}
-        async for mode, chunk in self.graph.astream(initial, stream_mode=["updates", "values"]):
+        config = {"callbacks": callbacks} if callbacks else None
+        async for mode, chunk in self.graph.astream(initial, config, stream_mode=["updates", "values"]):
             if mode == "updates":
                 steps.extend(chunk)
             else:

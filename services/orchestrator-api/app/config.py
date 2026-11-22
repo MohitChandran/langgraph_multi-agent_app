@@ -98,6 +98,12 @@ class Settings(BaseSettings):
     web_search_timeout_seconds: float = 20.0
     web_snippet_chars: int = 400  # each result's snippet is cut to this before it reaches the answer LLM
 
+    # --- Tracing (Langfuse, self-hosted with docker-compose.langfuse.yml), project plan Phase 2 / 3-G ---
+    # Both keys empty = tracing off: nothing is sent anywhere (tests, CI, a machine without Langfuse).
+    langfuse_public_key: str = ""
+    langfuse_secret_key: SecretStr = SecretStr("")
+    langfuse_base_url: str = "http://localhost:3000"
+
     @field_validator("data_dir")
     @classmethod
     def _resolve_data_dir(cls, value: Path) -> Path:

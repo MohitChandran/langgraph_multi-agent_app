@@ -53,6 +53,7 @@ from langgraph.types import Command, interrupt
 from app.chat.memory import ConversationTurn, format_history
 from app.config import get_settings
 from app.llm import LLM_ERRORS, get_llm
+from app.observability import get_tracing
 from app.orchestrator.guards import call_key, check_call, count_call, extract_user_emails
 from app.orchestrator.models import (
     TOOL_AGENTS,
@@ -161,7 +162,7 @@ class Orchestrator:
         builder.add_edge("force_answer", "finalize")
         builder.add_edge("fallback", "finalize")
         builder.add_edge("finalize", END)
-        return builder.compile(checkpointer=self.checkpointer)
+        return builder.compile(checkpointer=self.checkpointer, name="orchestrator")
 
     # ------------------------------------------------------------------ public API
 
@@ -224,7 +225,9 @@ class Orchestrator:
         node; only a paused turn needs to be saved (D7).
         A paused run keeps its thread; a finished or failed one deletes it.
         """
-        config = run_config(thread_id)
+        # Langfuse (no-op when off): the handler records every node and LLM call of this run, nested under the
+        # current trace; run_name is what the graph's root run is called there.
+        config = {**run_config(thread_id), "callbacks": get_tracing().callbacks(), "run_name": "orchestrator"}
         state: dict[str, Any] = {}
         paused = False
 
