@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Planned 2026-11-11. S0–S4 done 2026-11-12 (dev session); S5 (LLM titles) not started. |
+| **Status** | Planned 2026-11-11. S0–S4 done 2026-11-12 (dev session); S5 (LLM titles) removed from the plan 2026-11-22 (user decision). |
 | **Written in** | a planning-only session. No code was changed. |
 | **Implement in** | a development session, stage by stage (Section 10). |
 | **Replaces** | an earlier draft with users and login. **Dropped by the user's decision:** no users, no login, no per-user history. |
@@ -138,7 +138,7 @@ No migration framework: `CREATE TABLE IF NOT EXISTS`, run on every startup. It's
 -- One row per conversation (sidebar item). Its id is used everywhere: URL, API, later LangGraph thread_id.
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    title          TEXT NOT NULL,                        -- first question, cut to 60 chars (stage S5: LLM title)
+    title          TEXT NOT NULL,                        -- first question, cut to 60 chars
     message_count  INTEGER NOT NULL DEFAULT 0,
     active_run_at  TIMESTAMPTZ,                          -- set while a reply is being generated, else NULL
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -370,11 +370,7 @@ Section 8. Acceptance:
 - Switch away during a reply and come back: the thinking indicator, then the answer.
 - Rename and delete work; the sidebar order follows the latest activity.
 
-### [ ] S5 — Optional polish: LLM titles
-After the first turn, a background task (`fastapi.BackgroundTasks`) asks the fast model for a 3–6 word title
-(`max_tokens=20`, because Groq's per-minute output-token limit rejects requests that could exceed it). It updates the title only if it's still
-the auto-generated one; never overwrite a manual rename (track it with a boolean `title_is_custom` column or by comparing
-to the truncated question). On error, keep the truncated question.
+### S5 — removed (user decision, 2026-11-22: LLM-generated titles are not needed)
 
 ---
 
@@ -421,7 +417,7 @@ records the `history` it received: no Groq calls in tests. Each test deletes the
 |---|---|---|
 | 1 | Memory window | Last **3** exchanges (setting `CHAT_MEMORY_TURNS`) |
 | 2 | Memory source | Our `chat_messages` table, not the LangGraph checkpointer (2.4); checkpointer later for Phase 6 |
-| 3 | Titles | First question cut to 60 chars; LLM title is optional stage S5 |
+| 3 | Titles | First question cut to 60 chars (the optional LLM-title stage S5 was removed) |
 | 4 | Delete | Hard delete with a confirm dialog (no trash / undo) |
 | 5 | A session's agent | Not fixed; each message is routed (DB agent only until Phase 2) |
 

@@ -1,15 +1,16 @@
 ENTERPRISE MULTI-AGENT OPS PLATFORM — PROJECT PLAN
 Last updated: 2026-11-22
-Status: Phase 1 (DB agent) and Phase 3 (Doc QA RAG agent) built and working; their evals are still to do.
-        Chat sessions + memory (plannings/01) and most of the chat UI are built early.
-        Phase 2 orchestrator (plannings/03-orchestrator.md) O0-O6 built: a ReAct supervisor answers every chat
-        message through the DB, Doc and (dummy) web/email agents, with code-enforced limits, email approval that
-        survives a restart, a UI with per-call chips/details and an approval card, and an eval (28/28, safety 9/9).
-        Next: the R9 / SQL evals, then the real web (MCP) and email (A2A) agents; Langfuse at the end.
+Status: DB agent (Phase 1), orchestrator + Langfuse tracing (Phase 2), Doc QA RAG agent (Phase 3), input guard +
+        web search agent over MCP (Phase 4) and the chat UI (Phase 7) are built and working.
+        Evals: guard 41/41, web smoke 6/6, orchestrator 31/33 (safety 12/12), SQL 18/25 on the first run.
+        Waiting on Groq's daily token quota (gpt-oss-20b, 200k tokens/day): the SQL eval retry of the 7 rate-limited
+        cases, the RAG eval's answer half, and the orchestrator eval rerun.
+        Next: the email agent (CrewAI service over A2A, Phase 5), human approval through it (Phase 6), showcase.
 
 ══════════════════════════════════════════════════════════════════════════════════════════════
 0. DECISION LOG
 ══════════════════════════════════════════════════════════════════════════════════════════════
+- Dropped from the plan (user decision, 2026-11-22): streaming answers, our own MCP server, LLM-generated chat titles.
 - LLM provider: Groq API (via langchain-groq).
     Models (set in .env, 2026-10-26): strong = openai/gpt-oss-20b, fast = qwen/qwen3.8-27b.
     Note: Groq has no embeddings API, so embeddings come from a local model
@@ -54,10 +55,10 @@ Protocols, in one line each:
 ══════════════════════════════════════════════════════════════════════════════════════════════
                             ┌────────────────────────────────────────┐
                             │        Frontend (React + Vite)         │
-                            │ - Chat (streamed) & file upload        │
+                            │ - Chat & file upload                   │
                             │ - HITL email review / approval modal   │
                             └────────────────────┬───────────────────┘
-                                                 │ HTTP / SSE stream
+                                                 │ HTTP (JSON)
                                                  ▼
                             ┌────────────────────────────────────────┐
                             │            FastAPI Gateway             │
@@ -100,7 +101,6 @@ A. Central Orchestrator (LangGraph + FastAPI)
    - Typed state: user query, planned sub-tasks, results per agent, final answer, messages.
    - Conditional edges route to the right agent(s); can run agents in parallel (Scenario 2).
    - Checkpointer (Postgres) persists graph state per session, which is needed for memory AND HITL.
-   - FastAPI streams progress and tokens to the frontend via SSE.
    - LLM: Groq. Pick models at Phase 0 from Groq's current model list
      (a stronger model for routing/SQL, a small fast one for cheap steps).
    - Groq free tier has rate limits: add retry with backoff from day one.
@@ -141,7 +141,6 @@ C. Doc QA Agent (Document Intelligence)
 D. Web Search Agent (MCP)
    - Connects to a DuckDuckGo MCP server using langchain-mcp-adapters.
    - Discovers tools at runtime (search, fetch page) instead of hardcoding API calls.
-   - Learning bonus: write our own tiny MCP server to understand the protocol from both sides.
 
 E. Email & Dispatch Agent (separate CrewAI service, A2A server)
    - Own process, own port, own requirements, so it is a genuine service boundary.
@@ -170,8 +169,7 @@ G. Observability (Langfuse, self-hosted in Docker)
 ══════════════════════════════════════════════════════════════════════════════════════════════
 4. FRONTEND (React + Vite, kept simple)
 ══════════════════════════════════════════════════════════════════════════════════════════════
-   - Chat page with streamed responses. Note: browser EventSource only supports GET;
-     for POST + streaming use fetch() and read the response body stream.
+   - Chat page with sessions; each answer is shown when it's complete.
    - File upload with ingestion status.
    - Approval card/modal for pending emails: Approve / Reject / Edit.
    - Plain CSS or a light component library. No complex state management.
@@ -230,7 +228,7 @@ Multi-agent/   (repo root)
 ├── services/
 │   ├── orchestrator-api/           # FastAPI + LangGraph
 │   │   ├── app/
-│   │   │   ├── main.py             # FastAPI entrypoint, SSE streaming, endpoints
+│   │   │   ├── main.py             # FastAPI entrypoint, endpoints
 │   │   │   ├── config.py
 │   │   │   ├── llm.py              # Groq client setup, retries
 │   │   │   ├── orchestrator/       # ReAct supervisor (plannings/03): models, tools, guards, prompts,
@@ -258,7 +256,7 @@ Multi-agent/   (repo root)
 │       ├── src/
 │       │   ├── App.jsx
 │       │   ├── components/         # Chat, FileUpload, ApprovalModal
-│       │   └── api.js              # Streaming fetch helpers
+│       │   └── api.js              # API client (fetch helpers)
 │       └── package.json
 
 Tooling: Python 3.12, uv, ruff, pytest. Node LTS for the frontend.
@@ -279,26 +277,32 @@ Rule: Claude writes the code and explains every file/function; interview prep ha
            [x] 2. safety.py (sqlglot validator) + 49 pytest cases incl. attack queries, run in CI
            [x] 3. schema.py (reflection) + database.py (async read-only pool) + 11 tests (9 integration)
            [x] 4. LangGraph workflow (write/validate/execute/answer + retry loop) + CLI + 6 fake-LLM tests
-           [ ] 5. 25-question SQL eval (execution accuracy) + first report
+           [~] 5. SQL eval (evals/sql_eval.py, 25 questions + 3 safety, execution accuracy): first report 2026-11-22
+               18/25, safety 3/3 (6 cases hit Groq's rate limit, 1 ambiguous question now accepts both readings);
+               the 7 are rerun with --retry-from once gpt-oss-20b has daily quota left
            [x] extra: minimal Gemini-style chat UI (services/frontend) + FastAPI POST /api/db/ask
-               (built early on request for manual testing; Phase 2 adds the orchestrator + streaming,
+               (built early on request for manual testing; Phase 2 adds the orchestrator,
                Phase 7 adds upload + approval UI)
            [x] extra: chat sessions + memory (plannings/01, S1-S4, 2026-11-12): sessions stored in Postgres
                schema `app`, last 3 exchanges as memory, sidebar with per-chat URLs
     Learn: structured output prompting, SQL safety, measuring an LLM component.
 
-[ ] Phase 2 — Orchestrator v1
-    Build: LangGraph supervisor with only the DB agent; FastAPI endpoint with SSE streaming;
+[x] Phase 2 — Orchestrator v1   (done 2026-11-22)
+    Build: LangGraph supervisor with only the DB agent; FastAPI endpoint;
            Postgres checkpointer; Langfuse tracing.
     Plan: plannings/03-orchestrator.md (stages O0-O6). Decided there: a ReAct supervisor over ALL agents
-          (dummy web/email for now), no streaming yet, Langfuse at the very end.
+          (dummy web/email for now), Langfuse at the very end.
     Steps: [x] O0-O4 (2026-11-17/18): agents as tools, safety guards in code, the ReAct graph, email approval
                with the Postgres checkpointer, /api/chat through the orchestrator + approval endpoint
            [x] O5 (2026-11-18): agent-call chips, sources, per-call details, email approval card, composer lock
            [x] O6 (2026-11-22): orchestration eval, 28 cases incl. prompt injection: 28/28, safety 9/9
                (evals/reports/orchestrator-2026-11-22.md)
-           [ ] Langfuse tracing (decided: at the very end)
-    Learn: StateGraph, typed state, conditional edges, checkpointing, streaming, tracing.
+           [x] Langfuse tracing (2026-11-22): self-hosted Langfuse v4 (docker-compose.langfuse.yml, headless init
+               of the project + keys from .env), SDK 5 (OpenTelemetry). One trace per chat turn (session = the chat):
+               input guard (guardrail span, a generation per Groq call with model + tokens) and the orchestrator's
+               LangGraph run via the LangChain callback handler, the agents' graphs nested under their tool calls.
+               Email decisions and /api/db/ask are traces too. Off when the keys are empty (tests, CI).
+    Learn: StateGraph, typed state, conditional edges, checkpointing, tracing.
 
 [ ] Phase 3 — Doc QA Agent
     Build: PDF upload -> layout-aware parsing -> structural chunking -> local embeddings
@@ -309,19 +313,23 @@ Rule: Claude writes the code and explains every file/function; interview prep ha
                pgvector + Postgres FTS, RRF + cross-encoder rerank, cited answers, upload UI with citations
            [x] extra: 2 x 7-page test PDFs + 14 hand-verified questions (evals/test_documents)
            [x] extra: "How this was answered" panel (route + each agent's reasoning) in the UI
-           [ ] R9 eval: retrieval hit rate@k, faithfulness, dense vs keyword vs hybrid
+           [~] R9 eval (evals/rag_eval.py): retrieval done 2026-11-22: hybrid MRR 0.975 vs dense 0.917 vs keyword
+               0.758, hit@6 100%; no refusal threshold (scores overlap). Answer half waits for Groq's daily quota.
     Learn: chunking strategies, embeddings vs keyword search, fusion, grounding/citations.
 
 [ ] Phase 4 — Web Search via MCP
     Build: connect to the DuckDuckGo MCP server; tool discovery; parallel branches for
-           Scenario 2. Bonus: our own minimal MCP server.
+           Scenario 2.
     Plan: plannings/04-guardrails-and-web-search-agent.md (stages W0-W6): a NeMo Guardrails input guard in front of the
           orchestrator + the real web agent (DuckDuckGo MCP server via uvx) + one email recipient.
     Steps: [x] W0-W2 (2026-11-22): packages + settings; input guard (Prompt Guard advisory, safety model decides;
                34/34 on the guard cases) in front of /api/chat and /api/db/ask, "Guardrail ⛔/✓" in the UI
            [x] W3-W5 (2026-11-22): DuckDuckGo MCP server via uvx (one session, `search` only), the web agent
                (LangGraph: check query -> search -> parse -> cited answer), wired into the orchestrator; one email
-               recipient   [ ] W6 evals (guard eval, web smoke eval, orchestrator eval update)
+               recipient
+           [~] W6 (2026-11-22): guard eval 41/41 (0 false blocks, 0 misses), web smoke 6/6, orchestrator eval
+               updated (33 cases) and run once (31/33, safety 12/12; the 2 guard false blocks on follow-ups fixed);
+               confirming rerun pending Groq's daily token quota for gpt-oss-20b
     Learn: MCP architecture, stdio vs HTTP transports, tool schemas, parallel graph branches.
 
 [ ] Phase 5 — Email Agent via A2A (no HITL yet)
@@ -333,11 +341,11 @@ Rule: Claude writes the code and explains every file/function; interview prep ha
     Build: input-required <-> LangGraph interrupt, resume endpoint, single cross-service trace.
     Learn: durable pause/resume, distributed tracing, async workflows.
 
-[ ] Phase 7 — React Frontend
-    Build: chat with streaming, file upload, approval modal.
-    Already built early: chat UI, sidebar/sessions, file upload with status chips, cited answers.
-    Left: streaming, approval modal.
-    Learn: consuming streamed responses in the browser, simple React state.
+[x] Phase 7 — React Frontend  (done: built along the way; the approval card came with plan 03 O5)
+    Build: chat, file upload, approval modal.
+    Built: chat UI, sidebar/sessions, file upload with status chips, cited answers, per-call agent details,
+           the email approval card, the guardrail flow.
+    Learn: simple React state, polling a long-running reply.
 
 [ ] Phase 8 — Hardening & Showcase
     Build: tests, CI, retries/timeouts, error handling, full docker-compose up,
