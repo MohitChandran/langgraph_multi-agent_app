@@ -1,11 +1,11 @@
 ENTERPRISE MULTI-AGENT OPS PLATFORM — PROJECT PLAN
-Last updated: 2026-11-18
+Last updated: 2026-11-22
 Status: Phase 1 (DB agent) and Phase 3 (Doc QA RAG agent) built and working; their evals are still to do.
         Chat sessions + memory (plannings/01) and most of the chat UI are built early.
-        Phase 2 orchestrator (plannings/03-orchestrator.md) O0-O5 built: a ReAct supervisor answers every chat
+        Phase 2 orchestrator (plannings/03-orchestrator.md) O0-O6 built: a ReAct supervisor answers every chat
         message through the DB, Doc and (dummy) web/email agents, with code-enforced limits, email approval that
-        survives a restart, and a UI with per-call chips/details and an approval card. Next: O6 (orchestration
-        eval + safety cases), then the R9 / SQL evals, then the real web (MCP) and email (A2A) agents.
+        survives a restart, a UI with per-call chips/details and an approval card, and an eval (28/28, safety 9/9).
+        Next: the R9 / SQL evals, then the real web (MCP) and email (A2A) agents; Langfuse at the end.
 
 ══════════════════════════════════════════════════════════════════════════════════════════════
 0. DECISION LOG
@@ -295,7 +295,9 @@ Rule: Claude writes the code and explains every file/function; interview prep ha
     Steps: [x] O0-O4 (2026-11-17/18): agents as tools, safety guards in code, the ReAct graph, email approval
                with the Postgres checkpointer, /api/chat through the orchestrator + approval endpoint
            [x] O5 (2026-11-18): agent-call chips, sources, per-call details, email approval card, composer lock
-           [ ] O6 orchestration eval + safety cases   [ ] Langfuse tracing (decided: at the very end)
+           [x] O6 (2026-11-22): orchestration eval, 28 cases incl. prompt injection: 28/28, safety 9/9
+               (evals/reports/orchestrator-2026-11-22.md)
+           [ ] Langfuse tracing (decided: at the very end)
     Learn: StateGraph, typed state, conditional edges, checkpointing, streaming, tracing.
 
 [ ] Phase 3 — Doc QA Agent
